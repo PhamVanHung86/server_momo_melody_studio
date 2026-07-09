@@ -6,14 +6,16 @@ import {
   updateFlashSale,
   deleteFlashSale,
 } from "../controllers/flashSaleController.js";
-import authMiddleware from "../middleware/authMiddleware.js";
+import authMiddleware, {
+  adminMiddleware,
+} from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
 router.get("/active", getActiveFlashSale); // Public
-router.get("/", authMiddleware, getAllFlashSales);
-router.post("/", authMiddleware, createFlashSale);
-router.put("/:id", authMiddleware, updateFlashSale);
-router.delete("/:id", authMiddleware, deleteFlashSale);
+router.get("/", authMiddleware, adminMiddleware, getAllFlashSales);
+router.post("/", authMiddleware, adminMiddleware, createFlashSale);
+router.put("/:id", authMiddleware, adminMiddleware, updateFlashSale);
+router.delete("/:id", authMiddleware, adminMiddleware, deleteFlashSale);
 
 export default router;

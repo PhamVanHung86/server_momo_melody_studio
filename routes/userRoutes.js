@@ -1,15 +1,18 @@
 import express from "express";
-import authMiddleware from "../middleware/authMiddleware.js";
 import {
   getCustomers,
   updateNickname,
   getCustomerDetail,
 } from "../controllers/userController.js";
+import authMiddleware, {
+  adminMiddleware,
+} from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
-router.get("/", authMiddleware, getCustomers);
-router.get("/:id", authMiddleware, getCustomerDetail);
-router.put("/:id/nickname", authMiddleware, updateNickname);
+router.get("/", authMiddleware, adminMiddleware, getCustomers);
+router.get("/:id", authMiddleware, adminMiddleware, getCustomerDetail);
+router.put("/:id/nickname", authMiddleware, adminMiddleware, updateNickname);
+router.put("/:id/mail-club", authMiddleware, adminMiddleware);
 
 export default router;

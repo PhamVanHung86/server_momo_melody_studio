@@ -41,6 +41,7 @@ export const register = async (req, res) => {
         name: user.name,
         email: user.email,
         avatar: user.avatar,
+        role: user.role,
       },
     });
   } catch (error) {
@@ -74,6 +75,7 @@ export const login = async (req, res) => {
         name: user.name,
         email: user.email,
         avatar: user.avatar,
+        role: user.role,
       },
     });
   } catch (error) {
@@ -91,6 +93,23 @@ export const logout = async (req, res) => {
 export const getMe = async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select("-password");
+    res.json({ success: true, user }); // role đã có trong user object
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Thêm vào cuối file:
+export const updateProfile = async (req, res) => {
+  try {
+    const { name, phone, address } = req.body;
+    const updateData = { name, phone, address };
+    if (req.file) updateData.avatar = req.file.path;
+
+    const user = await (await import("../models/User.js")).default
+      .findByIdAndUpdate(req.user.id, updateData, { new: true })
+      .select("-password");
+
     res.json({ success: true, user });
   } catch (error) {
     res.status(500).json({ message: error.message });

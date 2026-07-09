@@ -7,7 +7,9 @@ import {
   deleteProduct,
 } from "../controllers/productController.js";
 import { upload } from "../config/cloudinary.js";
-import authMiddleware from "../middleware/authMiddleware.js";
+import authMiddleware, {
+  adminMiddleware,
+} from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
@@ -16,8 +18,20 @@ router.get("/", getProducts);
 router.get("/:id", getProductById);
 
 // Admin only
-router.post("/", authMiddleware, upload.array("images", 4), addProduct);
-router.put("/:id", authMiddleware, upload.array("images", 4), updateProduct);
-router.delete("/:id", authMiddleware, deleteProduct);
+router.post(
+  "/",
+  authMiddleware,
+  adminMiddleware,
+  upload.array("images", 4),
+  addProduct,
+);
+router.put(
+  "/:id",
+  authMiddleware,
+  adminMiddleware,
+  upload.array("images", 4),
+  updateProduct,
+);
+router.delete("/:id", authMiddleware, adminMiddleware, deleteProduct);
 
 export default router;

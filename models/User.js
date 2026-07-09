@@ -8,8 +8,10 @@ const userSchema = new mongoose.Schema(
     googleId: { type: String, default: null },
     avatar: { type: String, default: null },
     nickname: { type: String, default: "" },
+    mailClubSubscribed: { type: Boolean, default: false },
     phone: { type: String, default: "" },
     address: { type: String, default: "" },
+    role: { type: String, enum: ["user", "admin"], default: "user" },
   },
   { timestamps: true },
 );

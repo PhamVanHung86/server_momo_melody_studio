@@ -10,6 +10,9 @@ import orderRoutes from "./routes/orderRoutes.js";
 import userRoutes from "./routes/userRoutes.js";
 import flashSaleRoutes from "./routes/flashSaleRoutes.js";
 import bannerRoutes from "./routes/bannerRoutes.js";
+import contactRoutes from "./routes/contactRoutes.js";
+import mailClubRoutes from "./routes/mailClubRoutes.js";
+import mailClubCollectionRoutes from "./routes/mailClubCollectionRoutes.js";
 
 dotenv.config();
 connectDB();
@@ -32,6 +35,9 @@ app.use("/api/orders", orderRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/flash-sales", flashSaleRoutes);
 app.use("/api/banners", bannerRoutes);
+app.use("/api/contact", contactRoutes);
+app.use("/api/mail-club", mailClubRoutes);
+app.use("/api/mail-club-collections", mailClubCollectionRoutes);
 
 app.get("/", (req, res) => res.send("momo's melody studio API 🌸"));
 

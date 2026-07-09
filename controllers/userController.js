@@ -1,5 +1,6 @@
 import User from "../models/User.js";
 import Order from "../models/Order.js";
+import MailClubSubscription from "../models/MailClubSubscription.js";
 
 export const getCustomers = async (req, res) => {
   try {
@@ -13,12 +14,21 @@ export const getCustomers = async (req, res) => {
 
         const latestOrder = orders[0];
 
+        // Tự động check MailClubSubscription theo email
+        const mailClubSub = await MailClubSubscription.findOne({
+          email: user.email,
+          status: "active",
+        });
+
         return {
           _id: user._id,
           name: user.name,
           email: user.email,
           avatar: user.avatar,
           nickname: user.nickname || "",
+          mailClubSubscribed: !!mailClubSub,
+          mailClubPlan: mailClubSub?.plan || null,
+          mailClubEndDate: mailClubSub?.endDate || null,
           phone: latestOrder?.shippingInfo?.phone || "",
           address: latestOrder?.shippingInfo?.address || "",
           createdAt: user.createdAt,

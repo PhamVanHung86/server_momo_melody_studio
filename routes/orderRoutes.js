@@ -7,15 +7,23 @@ import {
   getDashboardStats,
   getAnalytics,
 } from "../controllers/orderController.js";
-import authMiddleware from "../middleware/authMiddleware.js";
+import authMiddleware, {
+  adminMiddleware,
+} from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
+router.get(
+  "/dashboard-stats",
+  authMiddleware,
+  adminMiddleware,
+  getDashboardStats,
+);
+router.get("/analytics", authMiddleware, adminMiddleware, getAnalytics);
+router.get("/", authMiddleware, adminMiddleware, getAllOrders);
+router.put("/:id/status", authMiddleware, adminMiddleware, updateOrderStatus);
+// Giữ nguyên routes của user:
 router.post("/", authMiddleware, createOrder);
 router.get("/my-orders", authMiddleware, getMyOrders);
-router.get("/", authMiddleware, getAllOrders);
-router.put("/:id/status", authMiddleware, updateOrderStatus);
-router.get("/dashboard-stats", authMiddleware, getDashboardStats);
-router.get("/analytics", authMiddleware, getAnalytics);
 
 export default router;

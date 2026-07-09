@@ -1,11 +1,13 @@
 import express from "express";
 import passport from "passport";
 import jwt from "jsonwebtoken";
+import { upload } from "../config/cloudinary.js";
 import {
   register,
   login,
   logout,
   getMe,
+  updateProfile,
 } from "../controllers/authController.js";
 import authMiddleware from "../middleware/authMiddleware.js";
 
@@ -16,6 +18,7 @@ router.post("/register", register);
 router.post("/login", login);
 router.post("/logout", logout);
 router.get("/me", authMiddleware, getMe);
+router.put("/profile", authMiddleware, upload.single("avatar"), updateProfile);
 
 // Google OAuth
 router.get(
