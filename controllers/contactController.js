@@ -58,7 +58,7 @@ export const markAsRead = async (req, res) => {
     const message = await ContactMessage.findByIdAndUpdate(
       req.params.id,
       { read: true },
-      { new: true },
+      { returnDocument: "after" },
     );
     res.json({ success: true, message });
   } catch (error) {

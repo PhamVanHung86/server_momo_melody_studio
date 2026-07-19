@@ -57,7 +57,7 @@ export const addImagesToCollection = async (req, res) => {
     const collection = await MailClubCollection.findByIdAndUpdate(
       id,
       { $push: { images: { $each: newImages } } },
-      { new: true },
+      { returnDocument: "after" },
     );
 
     res.json({ success: true, collection });
@@ -78,7 +78,7 @@ export const removeImageFromCollection = async (req, res) => {
     const collection = await MailClubCollection.findByIdAndUpdate(
       id,
       { $pull: { images: imageUrl } },
-      { new: true },
+      { returnDocument: "after" },
     );
 
     res.json({ success: true, collection });
@@ -93,7 +93,7 @@ export const updateCollection = async (req, res) => {
     const collection = await MailClubCollection.findByIdAndUpdate(
       req.params.id,
       req.body,
-      { new: true },
+      { returnDocument: "after" },
     );
     res.json({ success: true, collection });
   } catch (error) {

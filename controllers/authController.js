@@ -107,10 +107,46 @@ export const updateProfile = async (req, res) => {
     if (req.file) updateData.avatar = req.file.path;
 
     const user = await (await import("../models/User.js")).default
-      .findByIdAndUpdate(req.user.id, updateData, { new: true })
+      .findByIdAndUpdate(req.user.id, updateData, { returnDocument: "after" })
       .select("-password");
 
     res.json({ success: true, user });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const setPassword = async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+
+    const user = await (
+      await import("../models/User.js")
+    ).default.findById(req.user.id);
+
+    if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
+
+    // Nếu đã có password → yêu cầu nhập password cũ để xác nhận
+    if (user.password) {
+      if (!currentPassword) {
+        return res
+          .status(400)
+          .json({ message: "Vui lòng nhập mật khẩu hiện tại" });
+      }
+      const match = await bcrypt.compare(currentPassword, user.password);
+      if (!match) {
+        return res
+          .status(400)
+          .json({ message: "Mật khẩu hiện tại không đúng" });
+      }
+    }
+
+    // Set password mới
+    const hashed = await bcrypt.hash(newPassword, 10);
+    user.password = hashed;
+    await user.save();
+
+    res.json({ success: true, message: "Đã cập nhật mật khẩu thành công" });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

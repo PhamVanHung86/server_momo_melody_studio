@@ -1,9 +1,11 @@
 import User from "../models/User.js";
 import Order from "../models/Order.js";
 import MailClubSubscription from "../models/MailClubSubscription.js";
+import { autoExpireSubscriptions } from "./mailClubController.js";
 
 export const getCustomers = async (req, res) => {
   try {
+    await autoExpireSubscriptions();
     const users = await User.find().select("-password").sort({ createdAt: -1 });
 
     // Lấy thêm thông tin đơn hàng cho mỗi user
@@ -52,7 +54,7 @@ export const updateNickname = async (req, res) => {
     const user = await User.findByIdAndUpdate(
       id,
       { nickname },
-      { new: true },
+      { returnDocument: "after" },
     ).select("-password");
 
     if (!user)
@@ -74,6 +76,11 @@ export const getCustomerDetail = async (req, res) => {
     const orders = await Order.find({ user: id }).sort({ createdAt: -1 });
     const totalSpent = orders.reduce((sum, o) => sum + o.total, 0);
 
+    const mailClubSub = await MailClubSubscription.findOne({
+      email: user.email,
+      status: "active",
+    });
+
     res.json({
       success: true,
       customer: {
@@ -82,7 +89,9 @@ export const getCustomerDetail = async (req, res) => {
         email: user.email,
         avatar: user.avatar,
         nickname: user.nickname || "",
-        mailClubSubscribed: user.mailClubSubscribed || false,
+        mailClubSubscribed: !!mailClubSub,
+        mailClubPlan: mailClubSub?.plan || null,
+        mailClubEndDate: mailClubSub?.endDate || null,
         createdAt: user.createdAt,
         totalOrders: orders.length,
         totalSpent,

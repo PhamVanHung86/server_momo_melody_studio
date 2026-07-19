@@ -1,5 +1,7 @@
 import MailClubSubscription from "../models/MailClubSubscription.js";
 import { resend } from "../config/resend.js";
+import Order from "../models/Order.js";
+import MailClubSettings from "../models/MailClubSettings.js";
 
 // Tính ngày hết hạn dựa theo gói
 const calcEndDate = (startDate, plan) => {
@@ -12,63 +14,63 @@ const calcEndDate = (startDate, plan) => {
 // ========== PUBLIC ==========
 
 // Đăng ký Mail Club (Client)
-export const createSubscription = async (req, res) => {
-  try {
-    const { name, email, phone, plan, userId } = req.body;
+// export const createSubscription = async (req, res) => {
+//   try {
+//     const { name, email, phone, plan, userId } = req.body;
 
-    // Kiểm tra đã đăng ký chưa
-    const existing = await MailClubSubscription.findOne({
-      email,
-      status: { $in: ["pending", "active"] },
-    });
+//     // Kiểm tra đã đăng ký chưa
+//     const existing = await MailClubSubscription.findOne({
+//       email,
+//       status: { $in: ["pending", "active"] },
+//     });
 
-    if (existing) {
-      return res.status(400).json({
-        message:
-          existing.status === "pending"
-            ? "Email này đang chờ xác nhận thanh toán"
-            : "Email này đang có gói đăng ký active",
-      });
-    }
+//     if (existing) {
+//       return res.status(400).json({
+//         message:
+//           existing.status === "pending"
+//             ? "Email này đang chờ xác nhận thanh toán"
+//             : "Email này đang có gói đăng ký active",
+//       });
+//     }
 
-    const sub = await MailClubSubscription.create({
-      name,
-      email,
-      phone,
-      plan,
-      userId: userId || null,
-    });
+//     const sub = await MailClubSubscription.create({
+//       name,
+//       email,
+//       phone,
+//       plan,
+//       userId: userId || null,
+//     });
 
-    // Gửi email xác nhận cho khách
-    try {
-      await resend.emails.send({
-        from: "momo's melody studio <onboarding@resend.dev>",
-        to: email,
-        subject: "🎀 Đăng ký Mail Club thành công!",
-        html: `
-          <div style="font-family: sans-serif; max-width: 500px; margin: 0 auto; padding: 24px;">
-            <h2 style="color: #4A4A6A;">Xin chào ${name}! 🌸</h2>
-            <p>Bạn đã đăng ký <strong>Mail Club ${plan === "monthly" ? "Tháng" : "Quý"}</strong> thành công!</p>
-            <div style="background: #FFF0F5; padding: 16px; border-radius: 12px; margin: 16px 0;">
-              <p style="color: #4A4A6A; margin: 0;"><strong>Thông tin chuyển khoản:</strong></p>
-              <p style="color: #4A4A6A;">Ngân hàng: Vietcombank</p>
-              <p style="color: #4A4A6A;">Số tài khoản: 1234567890</p>
-              <p style="color: #4A4A6A;">Chủ tài khoản: NGUYEN VAN A</p>
-              <p style="color: #FFB7C5;"><strong>Nội dung CK: MAILCLUB ${email}</strong></p>
-            </div>
-            <p>Sau khi chuyển khoản, chúng mình sẽ xác nhận trong vòng 24h nhé! 🩷</p>
-          </div>
-        `,
-      });
-    } catch (emailErr) {
-      console.error("Lỗi gửi email:", emailErr);
-    }
+//     // Gửi email xác nhận cho khách
+//     try {
+//       await resend.emails.send({
+//         from: "momo's melody studio <onboarding@resend.dev>",
+//         to: email,
+//         subject: "🎀 Đăng ký Mail Club thành công!",
+//         html: `
+//           <div style="font-family: sans-serif; max-width: 500px; margin: 0 auto; padding: 24px;">
+//             <h2 style="color: #4A4A6A;">Xin chào ${name}! 🌸</h2>
+//             <p>Bạn đã đăng ký <strong>Mail Club ${plan === "monthly" ? "Tháng" : "Quý"}</strong> thành công!</p>
+//             <div style="background: #FFF0F5; padding: 16px; border-radius: 12px; margin: 16px 0;">
+//               <p style="color: #4A4A6A; margin: 0;"><strong>Thông tin chuyển khoản:</strong></p>
+//               <p style="color: #4A4A6A;">Ngân hàng: Vietcombank</p>
+//               <p style="color: #4A4A6A;">Số tài khoản: 1234567890</p>
+//               <p style="color: #4A4A6A;">Chủ tài khoản: NGUYEN VAN A</p>
+//               <p style="color: #FFB7C5;"><strong>Nội dung CK: MAILCLUB ${email}</strong></p>
+//             </div>
+//             <p>Sau khi chuyển khoản, chúng mình sẽ xác nhận trong vòng 24h nhé! 🩷</p>
+//           </div>
+//         `,
+//       });
+//     } catch (emailErr) {
+//       console.error("Lỗi gửi email:", emailErr);
+//     }
 
-    res.status(201).json({ success: true, subscription: sub });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-};
+//     res.status(201).json({ success: true, subscription: sub });
+//   } catch (error) {
+//     res.status(500).json({ message: error.message });
+//   }
+// };
 
 // Xem trạng thái sub của user hiện tại
 export const getMySubscription = async (req, res) => {
@@ -363,6 +365,135 @@ export const adminUpdateSubscription = async (req, res) => {
       new: true,
     });
     res.json({ success: true, subscription: sub });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Thêm hàm này:
+export const autoExpireSubscriptions = async () => {
+  try {
+    const result = await MailClubSubscription.updateMany(
+      {
+        status: "active",
+        endDate: { $lt: new Date() },
+      },
+      { $set: { status: "expired" } },
+    );
+    if (result.modifiedCount > 0) {
+      console.log(`✅ Auto expired ${result.modifiedCount} subscriptions`);
+    }
+  } catch (error) {
+    console.error("Auto expire error:", error);
+  }
+};
+
+export const createSubscription = async (req, res) => {
+  try {
+    const settings = await MailClubSettings.findOne();
+    if (!settings?.isOpen) {
+      return res.status(400).json({ message: "Form đăng ký hiện đã đóng" });
+    }
+    if (settings.closeAt && new Date() > new Date(settings.closeAt)) {
+      await MailClubSettings.findOneAndUpdate({}, { isOpen: false });
+      return res.status(400).json({ message: "Form đăng ký đã hết thời gian" });
+    }
+    const { name, email, phone, plan, userId } = req.body;
+    // Kiểm tra đã đăng ký chưa
+    const existing = await MailClubSubscription.findOne({
+      email,
+      status: { $in: ["pending", "active"] },
+    });
+
+    if (existing) {
+      return res.status(400).json({
+        message:
+          existing.status === "pending"
+            ? "Email này đang chờ xác nhận thanh toán"
+            : "Email này đang có gói đăng ký active",
+      });
+    }
+
+    const PLAN_PRICE = { monthly: 135000, quarterly: 364500 };
+    const PLAN_LABEL = {
+      monthly: "Mail Club Tháng 🌸",
+      quarterly: "Mail Club Quý 🎀",
+    };
+    const price = PLAN_PRICE[plan] || 135000;
+
+    // Tạo subscription
+    const sub = await MailClubSubscription.create({
+      name,
+      email,
+      phone,
+      plan,
+      userId: userId || null,
+    });
+
+    // Tạo order tương ứng
+    const orderData = {
+      items: [
+        {
+          product: sub._id.toString(),
+          name: PLAN_LABEL[plan],
+          image: "",
+          price,
+          quantity: 1,
+        },
+      ],
+      shippingInfo: {
+        name,
+        phone,
+        address: "Mail Club — Giao qua bưu điện",
+        note: `Đăng ký ${PLAN_LABEL[plan]}`,
+      },
+      paymentMethod: "transfer",
+      subtotal: price,
+      deliveryFee: 0,
+      total: price,
+      status: "Đang xử lý",
+    };
+
+    // Nếu có userId thì gắn vào order
+    if (userId) {
+      orderData.user = userId;
+      await Order.create(orderData);
+    } else {
+      // Khách chưa có tài khoản → lưu thêm field email vào order
+      await Order.create({
+        ...orderData,
+        user: null, // tạm null
+        guestEmail: email, // field mới
+      });
+    }
+
+    // Gửi email xác nhận
+    try {
+      await resend.emails.send({
+        from: "momo's melody studio <onboarding@resend.dev>",
+        to: email,
+        subject: "🎀 Đăng ký Mail Club thành công!",
+        html: `
+          <div style="font-family: sans-serif; max-width: 500px; margin: 0 auto; padding: 24px;">
+            <h2 style="color: #4A4A6A;">Xin chào ${name}! 🌸</h2>
+            <p>Bạn đã đăng ký <strong>${PLAN_LABEL[plan]}</strong> thành công!</p>
+            <div style="background: #FFF0F5; padding: 16px; border-radius: 12px; margin: 16px 0;">
+              <p style="color: #4A4A6A; margin: 0;"><strong>Thông tin chuyển khoản:</strong></p>
+              <p style="color: #4A4A6A;">Ngân hàng: TP Bank</p>
+              <p style="color: #4A4A6A;">Số tài khoản:  24182951170</p>
+              <p style="color: #4A4A6A;">Chủ tài khoản: TRAN THI NGOC ANH</p>
+              <p style="color: #FFB7C5;"><strong>Nội dung CK: TÊN - SĐT</strong></p>
+              <p style="color: #4A4A6A; margin-top: 8px;"><strong>Số tiền: ${price.toLocaleString()} đ</strong></p>
+            </div>
+            <p>Sau khi chuyển khoản, chúng mình sẽ xác nhận trong vòng 24h nhé! 🩷</p>
+          </div>
+        `,
+      });
+    } catch (emailErr) {
+      console.error("Lỗi gửi email:", emailErr);
+    }
+
+    res.status(201).json({ success: true, subscription: sub });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

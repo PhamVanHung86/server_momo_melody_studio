@@ -1,7 +1,6 @@
 import Order from "../models/Order.js";
-
-// Tạo đơn hàng mới (Client)
 import Product from "../models/Product.js";
+import MailClubSubscription from "../models/MailClubSubscription.js";
 
 export const createOrder = async (req, res) => {
   try {
@@ -77,7 +76,7 @@ export const updateOrderStatus = async (req, res) => {
     const order = await Order.findByIdAndUpdate(
       req.params.id,
       { status },
-      { new: true },
+      { returnDocument: "after" },
     );
     if (!order)
       return res.status(404).json({ message: "Không tìm thấy đơn hàng" });
@@ -87,7 +86,6 @@ export const updateOrderStatus = async (req, res) => {
   }
 };
 
-// Thêm vào cuối file:
 export const getDashboardStats = async (req, res) => {
   try {
     const orders = await Order.find().populate("user", "name email");
@@ -150,6 +148,48 @@ export const getDashboardStats = async (req, res) => {
     const uniqueCustomers = new Set(orders.map((o) => o.user?._id?.toString()))
       .size;
 
+    const mailClubStats = await MailClubSubscription.aggregate([
+      {
+        $group: {
+          _id: "$status",
+          count: { $sum: 1 },
+        },
+      },
+    ]);
+
+    const mailClubRevenue = await MailClubSubscription.aggregate([
+      {
+        $match: { status: { $in: ["active", "expired"] } },
+      },
+      {
+        $group: {
+          _id: "$plan",
+          count: { $sum: 1 },
+        },
+      },
+    ]);
+
+    // Tính doanh thu Mail Club (giả định giá cố định)
+    const PLAN_PRICE = { monthly: 150000, quarterly: 420000 };
+    const mailClubTotalRevenue = mailClubRevenue.reduce((sum, item) => {
+      return sum + (PLAN_PRICE[item._id] || 0) * item.count;
+    }, 0);
+
+    const activeCount =
+      mailClubStats.find((s) => s._id === "active")?.count || 0;
+    const pendingCount =
+      mailClubStats.find((s) => s._id === "pending")?.count || 0;
+    const expiredCount =
+      mailClubStats.find((s) => s._id === "expired")?.count || 0;
+
+    // Sắp hết hạn trong 7 ngày
+    const in7Days = new Date();
+    in7Days.setDate(in7Days.getDate() + 7);
+    const expiringCount = await MailClubSubscription.countDocuments({
+      status: "active",
+      endDate: { $gte: new Date(), $lte: in7Days },
+    });
+
     res.json({
       success: true,
       stats: {
@@ -161,6 +201,17 @@ export const getDashboardStats = async (req, res) => {
         totalCustomers: uniqueCustomers,
         revenueChart: last7Days,
         recentOrders,
+        mailClub: {
+          active: activeCount,
+          pending: pendingCount,
+          expired: expiredCount,
+          expiring: expiringCount,
+          totalRevenue: mailClubTotalRevenue,
+          monthlyCount:
+            mailClubRevenue.find((r) => r._id === "monthly")?.count || 0,
+          quarterlyCount:
+            mailClubRevenue.find((r) => r._id === "quarterly")?.count || 0,
+        },
       },
     });
   } catch (error) {

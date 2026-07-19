@@ -8,6 +8,7 @@ import {
   logout,
   getMe,
   updateProfile,
+  setPassword,
 } from "../controllers/authController.js";
 import authMiddleware from "../middleware/authMiddleware.js";
 
@@ -19,6 +20,7 @@ router.post("/login", login);
 router.post("/logout", logout);
 router.get("/me", authMiddleware, getMe);
 router.put("/profile", authMiddleware, upload.single("avatar"), updateProfile);
+router.put("/set-password", authMiddleware, setPassword);
 
 // Google OAuth
 router.get(

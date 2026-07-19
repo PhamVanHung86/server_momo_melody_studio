@@ -13,11 +13,20 @@ import bannerRoutes from "./routes/bannerRoutes.js";
 import contactRoutes from "./routes/contactRoutes.js";
 import mailClubRoutes from "./routes/mailClubRoutes.js";
 import mailClubCollectionRoutes from "./routes/mailClubCollectionRoutes.js";
+import cron from "node-cron";
+import { autoExpireSubscriptions } from "./controllers/mailClubController.js";
+
+import mailClubSettingsRoutes from "./routes/mailClubSettingsRoutes.js";
 
 dotenv.config();
 connectDB();
 
 const app = express();
+
+cron.schedule("1 0 * * *", () => {
+  console.log("🕐 Running auto expire subscriptions...");
+  autoExpireSubscriptions();
+});
 
 app.use(
   cors({
@@ -28,6 +37,7 @@ app.use(
 app.use(express.json());
 app.use(cookieParser());
 app.use(passport.initialize());
+autoExpireSubscriptions();
 
 app.use("/api/auth", authRoutes);
 app.use("/api/products", productRoutes);
@@ -38,6 +48,7 @@ app.use("/api/banners", bannerRoutes);
 app.use("/api/contact", contactRoutes);
 app.use("/api/mail-club", mailClubRoutes);
 app.use("/api/mail-club-collections", mailClubCollectionRoutes);
+app.use("/api/mail-club-settings", mailClubSettingsRoutes);
 
 app.get("/", (req, res) => res.send("momo's melody studio API 🌸"));
 
