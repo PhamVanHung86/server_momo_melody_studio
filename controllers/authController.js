@@ -2,14 +2,21 @@ import User from "../models/User.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 
-const generateToken = (id) =>
+export const generateToken = (id) =>
   jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: "7d" });
 
-const setCookie = (res, token) => {
+const isProd = process.env.NODE_ENV === "production";
+
+export const setCookie = (res, token) => {
   res.cookie("token", token, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "strict",
+    // 🔑 Production: client/admin thường nằm ở domain khác server (VD:
+    // Vercel <-> Render) → cookie là "cross-site" nên PHẢI dùng
+    // sameSite: "none" kèm secure: true (secure bắt buộc khi dùng "none",
+    // và chỉ hoạt động qua HTTPS). Dev local (cùng localhost, chạy HTTP)
+    // thì giữ "lax" cho đơn giản, không cần secure.
+    secure: isProd,
+    sameSite: isProd ? "none" : "lax",
     maxAge: 7 * 24 * 60 * 60 * 1000,
   });
 };
@@ -42,6 +49,7 @@ export const register = async (req, res) => {
         email: user.email,
         avatar: user.avatar,
         role: user.role,
+        hasPassword: !!user.password,
       },
     });
   } catch (error) {
@@ -74,8 +82,11 @@ export const login = async (req, res) => {
         id: user._id,
         name: user.name,
         email: user.email,
+        phone: user.phone || "",
+        address: user.address || "",
         avatar: user.avatar,
         role: user.role,
+        hasPassword: !!user.password,
       },
     });
   } catch (error) {
@@ -85,30 +96,43 @@ export const login = async (req, res) => {
 
 // Đăng xuất
 export const logout = async (req, res) => {
-  res.clearCookie("token");
+  // ⚠️ clearCookie cần đúng options (secure/sameSite) như lúc set,
+  // nếu không trình duyệt sẽ không nhận diện đúng cookie để xoá.
+  res.clearCookie("token", {
+    httpOnly: true,
+    secure: isProd,
+    sameSite: isProd ? "none" : "lax",
+  });
   res.json({ success: true, message: "Đăng xuất thành công" });
 };
 
-// Lấy thông tin user hiện tại
+// Lấy thông tin user hiện tại (Tối ưu 1 lần query DB)
 export const getMe = async (req, res) => {
   try {
-    const user = await User.findById(req.user.id).select("-password");
-    res.json({ success: true, user }); // role đã có trong user object
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
+
+    const hasPassword = !!user.password;
+    const userObj = user.toObject();
+    delete userObj.password;
+
+    res.json({ success: true, user: { ...userObj, hasPassword } });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 };
 
-// Thêm vào cuối file:
+// Cập nhật thông tin cá nhân (Sửa deprecation warning)
 export const updateProfile = async (req, res) => {
   try {
     const { name, phone, address } = req.body;
     const updateData = { name, phone, address };
     if (req.file) updateData.avatar = req.file.path;
 
-    const user = await (await import("../models/User.js")).default
-      .findByIdAndUpdate(req.user.id, updateData, { returnDocument: "after" })
-      .select("-password");
+    const user = await User.findByIdAndUpdate(req.user.id, updateData, {
+      returnDocument: "after", // Đã thay new: true
+      runValidators: true,
+    }).select("-password");
 
     res.json({ success: true, user });
   } catch (error) {
@@ -116,13 +140,17 @@ export const updateProfile = async (req, res) => {
   }
 };
 
+// Thiết lập/Đổi mật khẩu (Đã thêm await & validate newPassword)
 export const setPassword = async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
 
-    const user = await (
-      await import("../models/User.js")
-    ).default.findById(req.user.id);
+    if (!newPassword) {
+      return res.status(400).json({ message: "Vui lòng nhập mật khẩu mới" });
+    }
+
+    // ✅ Đã thêm await
+    const user = await User.findById(req.user.id);
 
     if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
 

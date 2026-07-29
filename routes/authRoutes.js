@@ -9,6 +9,8 @@ import {
   getMe,
   updateProfile,
   setPassword,
+  setCookie,
+  generateToken,
 } from "../controllers/authController.js";
 import authMiddleware from "../middleware/authMiddleware.js";
 
@@ -38,16 +40,8 @@ router.get(
     failureRedirect: "http://localhost:5173/login?error=google",
   }),
   (req, res) => {
-    const token = jwt.sign({ id: req.user._id }, process.env.JWT_SECRET, {
-      expiresIn: "7d",
-    });
-
-    res.cookie("token", token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
+    const token = generateToken(req.user._id);
+    setCookie(res, token);
 
     res.redirect("http://localhost:5173");
   },

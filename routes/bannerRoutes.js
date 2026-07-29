@@ -14,7 +14,7 @@ import authMiddleware, {
 const router = express.Router();
 
 router.get("/active", getActiveBanners);
-router.get("/", authMiddleware, getAllBanners);
+router.get("/", authMiddleware, adminMiddleware, getAllBanners);
 
 router.post(
   "/",

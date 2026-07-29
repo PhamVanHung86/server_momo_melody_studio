@@ -1,47 +1,95 @@
 import Order from "../models/Order.js";
 import Product from "../models/Product.js";
 import MailClubSubscription from "../models/MailClubSubscription.js";
+import { resend } from "../config/resend.js";
+import Notification from "../models/Notification.js";
+import mongoose from "mongoose";
+import { activateSubscription } from "./mailClubController.js";
 
+const calcDeliveryFee = (subtotal) => {
+  const FREE_SHIP_THRESHOLD = 300000;
+  const FLAT_FEE = 20000;
+  return subtotal >= FREE_SHIP_THRESHOLD ? 0 : FLAT_FEE;
+};
+
+// Tạo đơn hàng mới
 export const createOrder = async (req, res) => {
+  const session = await mongoose.startSession();
   try {
-    const { items, shippingInfo, paymentMethod, subtotal, deliveryFee, total } =
-      req.body;
+    const { items, shippingInfo, paymentMethod } = req.body;
 
-    // Kiểm tra và trừ kho
-    for (const item of items) {
-      const product = await Product.findById(item.product);
-      if (!product) {
-        return res
-          .status(404)
-          .json({ message: `Không tìm thấy sản phẩm: ${item.name}` });
-      }
-      if (product.stock < item.quantity) {
-        return res
-          .status(400)
-          .json({ message: `${item.name} chỉ còn ${product.stock} sản phẩm` });
-      }
+    if (!items || items.length === 0) {
+      return res.status(400).json({ message: "Giỏ hàng trống" });
     }
 
-    // Trừ kho + tăng sold
+    // Gộp quantity theo product trước khi check tồn kho
+    const mergedQuantities = {};
     for (const item of items) {
-      await Product.findByIdAndUpdate(item.product, {
-        $inc: { stock: -item.quantity, sold: item.quantity },
-      });
+      mergedQuantities[item.product] =
+        (mergedQuantities[item.product] || 0) + item.quantity;
     }
 
-    const order = await Order.create({
-      user: req.user.id,
-      items,
-      shippingInfo,
-      paymentMethod,
-      subtotal,
-      deliveryFee,
-      total,
+    let order;
+
+    await session.withTransaction(async () => {
+      let subtotal = 0;
+      const verifiedItems = [];
+
+      for (const item of items) {
+        const product = await Product.findById(item.product).session(session);
+        if (!product) {
+          throw new Error(`Không tìm thấy sản phẩm: ${item.name}`);
+        }
+
+        const totalRequested = mergedQuantities[item.product];
+        if (product.stock < totalRequested) {
+          throw new Error(`${product.name} chỉ còn ${product.stock} sản phẩm`);
+        }
+
+        subtotal += product.price * item.quantity;
+        verifiedItems.push({
+          product: product._id.toString(),
+          name: product.name,
+          image: product.images?.[0] || "",
+          price: product.price,
+          quantity: item.quantity,
+        });
+      }
+
+      const deliveryFee = calcDeliveryFee(subtotal);
+      const total = subtotal + deliveryFee;
+
+      // Trừ kho trong cùng transaction
+      for (const [productId, qty] of Object.entries(mergedQuantities)) {
+        await Product.findByIdAndUpdate(
+          productId,
+          { $inc: { stock: -qty, sold: qty } },
+          { session },
+        );
+      }
+
+      const createdOrders = await Order.create(
+        [
+          {
+            user: req.user?.id || null,
+            items: verifiedItems,
+            shippingInfo,
+            paymentMethod,
+            subtotal,
+            deliveryFee,
+            total,
+          },
+        ],
+        { session },
+      );
+      order = createdOrders[0];
     });
 
     res.status(201).json({ success: true, order });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(400).json({ message: error.message });
+  } finally {
+    session.endSession();
   }
 };
 
@@ -69,6 +117,20 @@ export const getAllOrders = async (req, res) => {
   }
 };
 
+// Nội dung thông báo tương ứng với từng trạng thái đơn hàng
+const ORDER_STATUS_NOTIFICATIONS = {
+  "Đang giao": {
+    title: "Đơn hàng đang được giao! 🚚",
+    message: (order) =>
+      `Đơn hàng #${order._id.toString().slice(-8).toUpperCase()} của bạn đang trên đường giao đến bạn.`,
+  },
+  "Đã giao": {
+    title: "Đơn hàng đã được giao! 🎉",
+    message: (order) =>
+      `Đơn hàng #${order._id.toString().slice(-8).toUpperCase()} của bạn đã giao thành công. Cảm ơn bạn đã ủng hộ momo's melody studio!`,
+  },
+};
+
 // Cập nhật trạng thái đơn hàng (Admin)
 export const updateOrderStatus = async (req, res) => {
   try {
@@ -80,18 +142,122 @@ export const updateOrderStatus = async (req, res) => {
     );
     if (!order)
       return res.status(404).json({ message: "Không tìm thấy đơn hàng" });
+
+    // ✅ Chỉ tạo Notification nếu đơn hàng thuộc về một User đã đăng ký
+    const notifDef = ORDER_STATUS_NOTIFICATIONS[status];
+    if (notifDef && order.user) {
+      await Notification.create({
+        user: order.user,
+        order: order._id,
+        title: notifDef.title,
+        message: notifDef.message(order),
+        link: "/orders",
+      });
+    }
+
     res.json({ success: true, order });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 };
 
+// Đếm số đơn hàng đang chờ xác nhận (Admin)
+export const getPendingOrdersCount = async (req, res) => {
+  try {
+    const count = await Order.countDocuments({ status: "Đang xử lý" });
+    res.json({ success: true, count });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Xác nhận đơn hàng (Admin)
+export const confirmOrder = async (req, res) => {
+  try {
+    const { sendEmail } = req.body;
+
+    const order = await Order.findById(req.params.id).populate(
+      "user",
+      "name email",
+    );
+    if (!order)
+      return res.status(404).json({ message: "Không tìm thấy đơn hàng" });
+
+    if (order.status !== "Đang xử lý") {
+      return res.status(400).json({
+        message: "Đơn hàng này không ở trạng thái chờ xác nhận",
+      });
+    }
+
+    order.status = "Đã xác nhận";
+    order.confirmedAt = new Date();
+
+    // Đồng bộ: nếu đơn này gắn với 1 gói Mail Club đang chờ xác nhận
+    // thì kích hoạt gói luôn
+    if (order.mailClubSubscription) {
+      const sub = await MailClubSubscription.findById(
+        order.mailClubSubscription,
+      );
+      if (sub && sub.status === "pending") {
+        await activateSubscription(sub, "Xác nhận qua đơn hàng");
+      }
+    }
+
+    // ✅ Chỉ tạo Notification nếu order có User (tránh crash với Guest)
+    if (order.user?._id) {
+      await Notification.create({
+        user: order.user._id,
+        order: order._id,
+        title: "Đơn hàng đã được xác nhận! 🎀",
+        message: `Đơn hàng #${order._id.toString().slice(-8).toUpperCase()} của bạn đã được xác nhận và đang được chuẩn bị.`,
+        link: "/orders",
+      });
+    }
+
+    let emailSent = false;
+    const toEmail = order.user?.email || order.guestEmail;
+
+    if (sendEmail && toEmail) {
+      try {
+        await resend.emails.send({
+          from: "momo's melody studio <onboarding@resend.dev>",
+          to: toEmail,
+          subject: "✅ Đơn hàng của bạn đã được xác nhận!",
+          html: `
+            <div style="font-family: sans-serif; max-width: 500px; margin: 0 auto; padding: 24px;">
+              <h2 style="color: #4A4A6A;">Xin chào ${order.shippingInfo.name}! 🌸</h2>
+              <p>Đơn hàng <strong>#${order._id.toString().slice(-8).toUpperCase()}</strong> của bạn đã được xác nhận và đang được chuẩn bị.</p>
+              <div style="background: #FFF0F5; padding: 16px; border-radius: 12px; margin: 16px 0;">
+                <p style="color: #4A4A6A; margin: 0;"><strong>Tổng tiền:</strong> ${order.total.toLocaleString()} đ</p>
+                <p style="color: #4A4A6A;"><strong>Địa chỉ giao hàng:</strong> ${order.shippingInfo.address}</p>
+                <p style="color: #4A4A6A;"><strong>Phương thức:</strong> ${order.paymentMethod === "cod" ? "Thanh toán khi nhận hàng (COD)" : "Chuyển khoản"}</p>
+              </div>
+              <p>Chúng mình sẽ sớm giao đơn hàng đến bạn. Cảm ơn bạn đã ủng hộ momo's melody studio! 🩷</p>
+            </div>
+          `,
+        });
+        emailSent = true;
+        order.confirmationEmailSent = true;
+      } catch (mailErr) {
+        console.error("Gửi email xác nhận đơn hàng thất bại:", mailErr);
+      }
+    }
+
+    await order.save();
+
+    res.json({ success: true, order, emailSent });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Lấy số liệu thống kê Dashboard Admin
 export const getDashboardStats = async (req, res) => {
   try {
     const orders = await Order.find().populate("user", "name email");
-    const products = await (
-      await import("../models/Product.js")
-    ).default.find();
+
+    // ✅ Sửa lỗi: Gọi đúng Product.countDocuments() thay vì Order.find()
+    const totalProducts = await Product.countDocuments();
 
     // Tổng doanh thu
     const totalRevenue = orders.reduce((sum, o) => sum + o.total, 0);
@@ -144,9 +310,10 @@ export const getDashboardStats = async (req, res) => {
         status: o.status,
       }));
 
-    // Khách hàng unique
-    const uniqueCustomers = new Set(orders.map((o) => o.user?._id?.toString()))
-      .size;
+    // ✅ Sửa lỗi: Lọc bỏ undefined khi đếm khách hàngunique
+    const uniqueCustomers = new Set(
+      orders.map((o) => o.user?._id?.toString()).filter(Boolean),
+    ).size;
 
     const mailClubStats = await MailClubSubscription.aggregate([
       {
@@ -169,8 +336,7 @@ export const getDashboardStats = async (req, res) => {
       },
     ]);
 
-    // Tính doanh thu Mail Club (giả định giá cố định)
-    const PLAN_PRICE = { monthly: 150000, quarterly: 420000 };
+    const PLAN_PRICE = { monthly: 135000, quarterly: 364500 };
     const mailClubTotalRevenue = mailClubRevenue.reduce((sum, item) => {
       return sum + (PLAN_PRICE[item._id] || 0) * item.count;
     }, 0);
@@ -182,7 +348,6 @@ export const getDashboardStats = async (req, res) => {
     const expiredCount =
       mailClubStats.find((s) => s._id === "expired")?.count || 0;
 
-    // Sắp hết hạn trong 7 ngày
     const in7Days = new Date();
     in7Days.setDate(in7Days.getDate() + 7);
     const expiringCount = await MailClubSubscription.countDocuments({
@@ -197,7 +362,7 @@ export const getDashboardStats = async (req, res) => {
         todayRevenue,
         totalOrders: orders.length,
         pendingOrders,
-        totalProducts: products.length,
+        totalProducts, // ✅ Đã truyền đúng số lượng sản phẩm
         totalCustomers: uniqueCustomers,
         revenueChart: last7Days,
         recentOrders,
@@ -219,21 +384,18 @@ export const getDashboardStats = async (req, res) => {
   }
 };
 
-// Thêm vào cuối file:
+// Lấy dữ liệu phân tích Analytics
 export const getAnalytics = async (req, res) => {
   try {
-    const { period = "month" } = req.query; // week | month | year
-    const Product = (await import("../models/Product.js")).default;
+    const { period = "month" } = req.query;
 
     const orders = await Order.find().populate("user", "name");
     const products = await Product.find();
 
-    // ========== Doanh thu theo khoảng thời gian ==========
     const now = new Date();
     let chartData = [];
 
     if (period === "week") {
-      // 7 ngày gần nhất
       for (let i = 6; i >= 0; i--) {
         const date = new Date();
         date.setDate(date.getDate() - i);
@@ -257,7 +419,6 @@ export const getAnalytics = async (req, res) => {
         });
       }
     } else if (period === "month") {
-      // 30 ngày gần nhất, nhóm theo tuần
       for (let i = 3; i >= 0; i--) {
         const endDate = new Date();
         endDate.setDate(endDate.getDate() - i * 7);
@@ -277,7 +438,6 @@ export const getAnalytics = async (req, res) => {
         });
       }
     } else if (period === "year") {
-      // 12 tháng gần nhất
       for (let i = 11; i >= 0; i--) {
         const date = new Date();
         date.setMonth(date.getMonth() - i);
@@ -298,7 +458,6 @@ export const getAnalytics = async (req, res) => {
       }
     }
 
-    // ========== So sánh tháng này vs tháng trước ==========
     const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
     const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
     const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -322,7 +481,6 @@ export const getAnalytics = async (req, res) => {
           ).toFixed(1)
         : 0;
 
-    // ========== Top sản phẩm bán chạy ==========
     const productSales = {};
     orders.forEach((order) => {
       order.items.forEach((item) => {
@@ -344,7 +502,6 @@ export const getAnalytics = async (req, res) => {
       .sort((a, b) => b.sold - a.sold)
       .slice(0, 5);
 
-    // ========== Doanh thu theo danh mục ==========
     const categoryRevenue = {};
     for (const order of orders) {
       for (const item of order.items) {

@@ -1,9 +1,11 @@
+import mongoose from "mongoose";
+import User from "../models/User.js";
 import MailClubSubscription from "../models/MailClubSubscription.js";
-import { resend } from "../config/resend.js";
-import Order from "../models/Order.js";
 import MailClubSettings from "../models/MailClubSettings.js";
+import Order from "../models/Order.js";
+import { resend } from "../config/resend.js";
 
-// Tính ngày hết hạn dựa theo gói
+// Helper: Tính ngày hết hạn dựa theo gói
 const calcEndDate = (startDate, plan) => {
   const end = new Date(startDate);
   if (plan === "monthly") end.setMonth(end.getMonth() + 1);
@@ -11,81 +13,209 @@ const calcEndDate = (startDate, plan) => {
   return end;
 };
 
+// Kích hoạt 1 subscription — dùng chung cho confirmPayment (xác nhận từ trang
+// Mail Club) và confirmOrder bên orderController (xác nhận từ trang Orders)
+// để tránh lặp code + đảm bảo 2 nơi luôn đồng bộ cùng 1 logic
+export const activateSubscription = async (sub, note = "Xác nhận lần đầu") => {
+  const startDate = new Date();
+  const endDate = calcEndDate(startDate, sub.plan);
+
+  sub.status = "active";
+  sub.startDate = startDate;
+  sub.endDate = endDate;
+  if (note) sub.adminNote = note;
+
+  sub.renewalHistory.push({
+    renewedAt: new Date(),
+    plan: sub.plan,
+    startDate,
+    endDate,
+    note,
+  });
+
+  await sub.save();
+
+  try {
+    await resend.emails.send({
+      from: "momo's melody studio <onboarding@resend.dev>",
+      to: sub.email,
+      subject: "✅ Mail Club đã được kích hoạt!",
+      html: `
+        <div style="font-family: sans-serif; max-width: 500px; margin: 0 auto; padding: 24px;">
+          <h2 style="color: #4A4A6A;">Xin chào ${sub.name}! 🎀</h2>
+          <p>Mail Club của bạn đã được kích hoạt thành công!</p>
+          <div style="background: #FFF0F5; padding: 16px; border-radius: 12px; margin: 16px 0;">
+            <p style="color: #4A4A6A;"><strong>Gói:</strong> ${sub.plan === "monthly" ? "Tháng" : "Quý"}</p>
+            <p style="color: #4A4A6A;"><strong>Bắt đầu:</strong> ${startDate.toLocaleDateString("vi-VN")}</p>
+            <p style="color: #FFB7C5;"><strong>Hết hạn:</strong> ${endDate.toLocaleDateString("vi-VN")}</p>
+          </div>
+          <p>Mail club của bạn sẽ sớm được gửi đi nhé! 🌸</p>
+        </div>
+      `,
+    });
+  } catch (emailErr) {
+    console.error("Lỗi gửi email:", emailErr);
+  }
+
+  return sub;
+};
+
 // ========== PUBLIC ==========
-
-// Đăng ký Mail Club (Client)
-// export const createSubscription = async (req, res) => {
-//   try {
-//     const { name, email, phone, plan, userId } = req.body;
-
-//     // Kiểm tra đã đăng ký chưa
-//     const existing = await MailClubSubscription.findOne({
-//       email,
-//       status: { $in: ["pending", "active"] },
-//     });
-
-//     if (existing) {
-//       return res.status(400).json({
-//         message:
-//           existing.status === "pending"
-//             ? "Email này đang chờ xác nhận thanh toán"
-//             : "Email này đang có gói đăng ký active",
-//       });
-//     }
-
-//     const sub = await MailClubSubscription.create({
-//       name,
-//       email,
-//       phone,
-//       plan,
-//       userId: userId || null,
-//     });
-
-//     // Gửi email xác nhận cho khách
-//     try {
-//       await resend.emails.send({
-//         from: "momo's melody studio <onboarding@resend.dev>",
-//         to: email,
-//         subject: "🎀 Đăng ký Mail Club thành công!",
-//         html: `
-//           <div style="font-family: sans-serif; max-width: 500px; margin: 0 auto; padding: 24px;">
-//             <h2 style="color: #4A4A6A;">Xin chào ${name}! 🌸</h2>
-//             <p>Bạn đã đăng ký <strong>Mail Club ${plan === "monthly" ? "Tháng" : "Quý"}</strong> thành công!</p>
-//             <div style="background: #FFF0F5; padding: 16px; border-radius: 12px; margin: 16px 0;">
-//               <p style="color: #4A4A6A; margin: 0;"><strong>Thông tin chuyển khoản:</strong></p>
-//               <p style="color: #4A4A6A;">Ngân hàng: Vietcombank</p>
-//               <p style="color: #4A4A6A;">Số tài khoản: 1234567890</p>
-//               <p style="color: #4A4A6A;">Chủ tài khoản: NGUYEN VAN A</p>
-//               <p style="color: #FFB7C5;"><strong>Nội dung CK: MAILCLUB ${email}</strong></p>
-//             </div>
-//             <p>Sau khi chuyển khoản, chúng mình sẽ xác nhận trong vòng 24h nhé! 🩷</p>
-//           </div>
-//         `,
-//       });
-//     } catch (emailErr) {
-//       console.error("Lỗi gửi email:", emailErr);
-//     }
-
-//     res.status(201).json({ success: true, subscription: sub });
-//   } catch (error) {
-//     res.status(500).json({ message: error.message });
-//   }
-// };
 
 // Xem trạng thái sub của user hiện tại
 export const getMySubscription = async (req, res) => {
   try {
-    const User = (await import("../models/User.js")).default;
-    const user = await User.findById(req.user.id);
+    const user = await User.findById(req.user.id).select("email").lean();
+    if (!user) {
+      return res.status(404).json({ message: "Không tìm thấy người dùng" });
+    }
 
     const sub = await MailClubSubscription.findOne({
       $or: [{ userId: req.user.id }, { email: user.email }],
       status: { $in: ["pending", "active"] },
-    }).sort({ createdAt: -1 });
+    })
+      .sort({ createdAt: -1 })
+      .lean();
 
     res.json({ success: true, subscription: sub });
   } catch (error) {
     res.status(500).json({ message: error.message });
+  }
+};
+
+// 🚀 Đăng ký Mail Club (Client) - Đã áp dụng ACID Transaction
+export const createSubscription = async (req, res) => {
+  const session = await mongoose.startSession();
+  try {
+    const settings = await MailClubSettings.findOne().lean();
+    if (!settings?.isOpen) {
+      return res.status(400).json({ message: "Form đăng ký hiện đã đóng" });
+    }
+
+    if (settings.closeAt && new Date() > new Date(settings.closeAt)) {
+      await MailClubSettings.findOneAndUpdate({}, { isOpen: false });
+      return res.status(400).json({ message: "Form đăng ký đã hết thời gian" });
+    }
+
+    const { name, email, phone, plan, userId, address } = req.body;
+
+    if (!name || !email || !phone || !plan) {
+      return res
+        .status(400)
+        .json({ message: "Vui lòng điền đầy đủ thông tin" });
+    }
+
+    // Kiểm tra đã đăng ký chưa
+    const existing = await MailClubSubscription.findOne({
+      email,
+      status: { $in: ["pending", "active"] },
+    }).lean();
+
+    if (existing) {
+      return res.status(400).json({
+        message:
+          existing.status === "pending"
+            ? "Email này đang chờ xác nhận thanh toán"
+            : "Email này đang có gói đăng ký active",
+      });
+    }
+
+    const PLAN_PRICE = { monthly: 135000, quarterly: 364500 };
+    const PLAN_LABEL = {
+      monthly: "Mail Club Tháng 🌸",
+      quarterly: "Mail Club Quý 🎀",
+    };
+    const price = PLAN_PRICE[plan] || 135000;
+
+    let sub, order;
+
+    // 🔒 ACID Transaction: Đảm bảo Subscription & Order được tạo VÀ liên kết
+    // với nhau thành công cùng lúc — nếu 1 bước lỗi thì rollback hết, không
+    // bao giờ để lọt 1 cặp record bị "mồ côi" (có sub mà không có order liên kết hoặc ngược lại)
+    await session.withTransaction(async () => {
+      const createdSubs = await MailClubSubscription.create(
+        [
+          {
+            name,
+            email,
+            phone,
+            address,
+            plan,
+            userId: userId || null,
+          },
+        ],
+        { session },
+      );
+      sub = createdSubs[0];
+
+      const orderData = {
+        items: [
+          {
+            product: sub._id.toString(),
+            name: PLAN_LABEL[plan] || "Mail Club",
+            image: "",
+            price,
+            quantity: 1,
+          },
+        ],
+        shippingInfo: {
+          name,
+          phone,
+          address: address
+            ? `${address} (Mail Club — Giao qua bưu điện)`
+            : "Mail Club — Giao qua bưu điện",
+          note: `Đăng ký ${PLAN_LABEL[plan] || "Mail Club"}`,
+        },
+        paymentMethod: "transfer",
+        subtotal: price,
+        deliveryFee: 0,
+        total: price,
+        status: "Đang xử lý",
+        user: userId || null,
+        guestEmail: userId ? "" : email,
+        // Liên kết chiều Order -> Subscription ngay lúc tạo
+        mailClubSubscription: sub._id,
+      };
+
+      const createdOrders = await Order.create([orderData], { session });
+      order = createdOrders[0];
+
+      // Liên kết chiều Subscription -> Order
+      sub.order = order._id;
+      await sub.save({ session });
+    });
+
+    // 📧 Gửi email xác nhận (Nằm ngoài Transaction để tránh làm gián đoạn DB)
+    try {
+      await resend.emails.send({
+        from: "momo's melody studio <onboarding@resend.dev>",
+        to: email,
+        subject: "🎀 Đăng ký Mail Club thành công!",
+        html: `
+          <div style="font-family: sans-serif; max-width: 500px; margin: 0 auto; padding: 24px;">
+            <h2 style="color: #4A4A6A;">Xin chào ${name}! 🌸</h2>
+            <p>Bạn đã đăng ký <strong>${PLAN_LABEL[plan]}</strong> thành công!</p>
+            <div style="background: #FFF0F5; padding: 16px; border-radius: 12px; margin: 16px 0;">
+              <p style="color: #4A4A6A; margin: 0;"><strong>Thông tin chuyển khoản:</strong></p>
+              <p style="color: #4A4A6A;">Ngân hàng: TP Bank</p>
+              <p style="color: #4A4A6A;">Số tài khoản: 24182951170</p>
+              <p style="color: #4A4A6A;">Chủ tài khoản: TRAN THI NGOC ANH</p>
+              <p style="color: #FFB7C5;"><strong>Nội dung CK: TÊN - SĐT</strong></p>
+              <p style="color: #4A4A6A; margin-top: 8px;"><strong>Số tiền: ${price.toLocaleString()} đ</strong></p>
+            </div>
+            <p>Sau khi chuyển khoản, chúng mình sẽ xác nhận trong vòng 24h nhé! 🩷</p>
+          </div>
+        `,
+      });
+    } catch (emailErr) {
+      console.error("Lỗi gửi email xác nhận Mail Club:", emailErr);
+    }
+
+    res.status(201).json({ success: true, subscription: sub, order });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  } finally {
+    session.endSession();
   }
 };
 
@@ -99,7 +229,6 @@ export const getAllSubscriptions = async (req, res) => {
 
     if (status && status !== "all") {
       if (status === "expiring") {
-        // Sắp hết hạn trong 7 ngày
         const now = new Date();
         const in7Days = new Date();
         in7Days.setDate(in7Days.getDate() + 7);
@@ -109,7 +238,10 @@ export const getAllSubscriptions = async (req, res) => {
       }
     }
 
-    const subs = await MailClubSubscription.find(query).sort({ createdAt: -1 });
+    const subs = await MailClubSubscription.find(query)
+      .sort({ createdAt: -1 })
+      .lean();
+
     res.json({ success: true, subscriptions: subs });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -125,45 +257,15 @@ export const confirmPayment = async (req, res) => {
     const sub = await MailClubSubscription.findById(id);
     if (!sub) return res.status(404).json({ message: "Không tìm thấy" });
 
-    const startDate = new Date();
-    const endDate = calcEndDate(startDate, sub.plan);
+    await activateSubscription(sub, note || "Xác nhận lần đầu");
 
-    sub.status = "active";
-    sub.startDate = startDate;
-    sub.endDate = endDate;
-    if (note) sub.adminNote = note;
-
-    sub.renewalHistory.push({
-      renewedAt: new Date(),
-      plan: sub.plan,
-      startDate,
-      endDate,
-      note: note || "Xác nhận lần đầu",
-    });
-
-    await sub.save();
-
-    // Gửi email thông báo cho khách
-    try {
-      await resend.emails.send({
-        from: "momo's melody studio <onboarding@resend.dev>",
-        to: sub.email,
-        subject: "✅ Mail Club đã được kích hoạt!",
-        html: `
-          <div style="font-family: sans-serif; max-width: 500px; margin: 0 auto; padding: 24px;">
-            <h2 style="color: #4A4A6A;">Xin chào ${sub.name}! 🎀</h2>
-            <p>Mail Club của bạn đã được kích hoạt thành công!</p>
-            <div style="background: #FFF0F5; padding: 16px; border-radius: 12px; margin: 16px 0;">
-              <p style="color: #4A4A6A;"><strong>Gói:</strong> ${sub.plan === "monthly" ? "Tháng" : "Quý"}</p>
-              <p style="color: #4A4A6A;"><strong>Bắt đầu:</strong> ${startDate.toLocaleDateString("vi-VN")}</p>
-              <p style="color: #FFB7C5;"><strong>Hết hạn:</strong> ${endDate.toLocaleDateString("vi-VN")}</p>
-            </div>
-            <p>Hộp quà của bạn sẽ sớm được gửi đi nhé! 🌸</p>
-          </div>
-        `,
-      });
-    } catch (emailErr) {
-      console.error("Lỗi gửi email:", emailErr);
+    // Đồng bộ: nếu subscription này có Order liên kết đang chờ xác nhận
+    // (khách đã tạo qua form đăng ký) thì xác nhận luôn đơn đó
+    if (sub.order) {
+      await Order.findOneAndUpdate(
+        { _id: sub.order, status: "Đang xử lý" },
+        { status: "Đã xác nhận", confirmedAt: new Date() },
+      );
     }
 
     res.json({ success: true, subscription: sub });
@@ -181,7 +283,6 @@ export const renewSubscription = async (req, res) => {
     const sub = await MailClubSubscription.findById(id);
     if (!sub) return res.status(404).json({ message: "Không tìm thấy" });
 
-    // Nếu còn hạn thì tính từ ngày hết hạn cũ, nếu hết hạn thì tính từ hôm nay
     const startDate =
       sub.endDate && new Date(sub.endDate) > new Date()
         ? new Date(sub.endDate)
@@ -204,7 +305,6 @@ export const renewSubscription = async (req, res) => {
 
     await sub.save();
 
-    // Email thông báo gia hạn
     try {
       await resend.emails.send({
         from: "momo's melody studio <onboarding@resend.dev>",
@@ -232,7 +332,7 @@ export const renewSubscription = async (req, res) => {
   }
 };
 
-// Gửi email nhắc gia hạn hàng loạt (sắp hết hạn)
+// Gửi email nhắc gia hạn hàng loạt
 export const sendRenewalReminders = async (req, res) => {
   try {
     const now = new Date();
@@ -242,7 +342,7 @@ export const sendRenewalReminders = async (req, res) => {
     const expiringSubs = await MailClubSubscription.find({
       status: "active",
       endDate: { $gte: now, $lte: in7Days },
-    });
+    }).lean();
 
     const results = await Promise.allSettled(
       expiringSubs.map((sub) =>
@@ -254,12 +354,12 @@ export const sendRenewalReminders = async (req, res) => {
             <div style="font-family: sans-serif; max-width: 500px; margin: 0 auto; padding: 24px;">
               <h2 style="color: #4A4A6A;">Xin chào ${sub.name}! 🩷</h2>
               <p>Mail Club của bạn sẽ hết hạn vào <strong style="color: #FFB7C5;">${new Date(sub.endDate).toLocaleDateString("vi-VN")}</strong>.</p>
-              <p>Để tiếp tục nhận hộp quà handmade mỗi ${sub.plan === "monthly" ? "tháng" : "quý"}, hãy gia hạn sớm nhé!</p>
+              <p>Để tiếp tục nhận Mail club mỗi ${sub.plan === "monthly" ? "tháng" : "quý"}, hãy gia hạn sớm nhé!</p>
               <div style="background: #FFF0F5; padding: 16px; border-radius: 12px; margin: 16px 0;">
                 <p style="color: #4A4A6A;"><strong>Thông tin chuyển khoản:</strong></p>
                 <p style="color: #4A4A6A;">Ngân hàng: Vietcombank</p>
                 <p style="color: #4A4A6A;">Số tài khoản: 1234567890</p>
-                <p style="color: #FFB7C5;"><strong>Nội dung CK: RENEW ${sub.email}</strong></p>
+                <p style="color: #FFB7C5;"><strong>Nội dung CK: RENEW SĐT</strong></p>
               </div>
             </div>
           `,
@@ -282,15 +382,14 @@ export const updateSubscription = async (req, res) => {
   try {
     const { id } = req.params;
     const sub = await MailClubSubscription.findByIdAndUpdate(id, req.body, {
-      new: true,
-    });
+      returnDocument: "after",
+    }).lean();
     res.json({ success: true, subscription: sub });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 };
 
-// Thêm vào cuối file:
 export const adminCreateSubscription = async (req, res) => {
   try {
     const {
@@ -362,15 +461,15 @@ export const adminUpdateSubscription = async (req, res) => {
     };
 
     const sub = await MailClubSubscription.findByIdAndUpdate(id, updateData, {
-      new: true,
-    });
+      returnDocument: "after",
+    }).lean();
+
     res.json({ success: true, subscription: sub });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 };
 
-// Thêm hàm này:
 export const autoExpireSubscriptions = async () => {
   try {
     const result = await MailClubSubscription.updateMany(
@@ -388,112 +487,143 @@ export const autoExpireSubscriptions = async () => {
   }
 };
 
-export const createSubscription = async (req, res) => {
+export const sendCustomEmail = async (req, res) => {
   try {
-    const settings = await MailClubSettings.findOne();
-    if (!settings?.isOpen) {
-      return res.status(400).json({ message: "Form đăng ký hiện đã đóng" });
-    }
-    if (settings.closeAt && new Date() > new Date(settings.closeAt)) {
-      await MailClubSettings.findOneAndUpdate({}, { isOpen: false });
-      return res.status(400).json({ message: "Form đăng ký đã hết thời gian" });
-    }
-    const { name, email, phone, plan, userId } = req.body;
-    // Kiểm tra đã đăng ký chưa
-    const existing = await MailClubSubscription.findOne({
-      email,
-      status: { $in: ["pending", "active"] },
-    });
+    const {
+      recipientType,
+      specificIds,
+      subject,
+      message,
+      buttonText,
+      buttonLink,
+    } = req.body;
 
-    if (existing) {
-      return res.status(400).json({
-        message:
-          existing.status === "pending"
-            ? "Email này đang chờ xác nhận thanh toán"
-            : "Email này đang có gói đăng ký active",
-      });
-    }
+    let subscribers = [];
 
-    const PLAN_PRICE = { monthly: 135000, quarterly: 364500 };
-    const PLAN_LABEL = {
-      monthly: "Mail Club Tháng 🌸",
-      quarterly: "Mail Club Quý 🎀",
-    };
-    const price = PLAN_PRICE[plan] || 135000;
-
-    // Tạo subscription
-    const sub = await MailClubSubscription.create({
-      name,
-      email,
-      phone,
-      plan,
-      userId: userId || null,
-    });
-
-    // Tạo order tương ứng
-    const orderData = {
-      items: [
-        {
-          product: sub._id.toString(),
-          name: PLAN_LABEL[plan],
-          image: "",
-          price,
-          quantity: 1,
-        },
-      ],
-      shippingInfo: {
-        name,
-        phone,
-        address: "Mail Club — Giao qua bưu điện",
-        note: `Đăng ký ${PLAN_LABEL[plan]}`,
-      },
-      paymentMethod: "transfer",
-      subtotal: price,
-      deliveryFee: 0,
-      total: price,
-      status: "Đang xử lý",
-    };
-
-    // Nếu có userId thì gắn vào order
-    if (userId) {
-      orderData.user = userId;
-      await Order.create(orderData);
-    } else {
-      // Khách chưa có tài khoản → lưu thêm field email vào order
-      await Order.create({
-        ...orderData,
-        user: null, // tạm null
-        guestEmail: email, // field mới
-      });
+    if (recipientType === "all") {
+      subscribers = await MailClubSubscription.find({
+        status: { $in: ["active", "expired"] },
+      }).lean();
+    } else if (recipientType === "active") {
+      subscribers = await MailClubSubscription.find({
+        status: "active",
+      }).lean();
+    } else if (recipientType === "specific") {
+      subscribers = await MailClubSubscription.find({
+        _id: { $in: specificIds },
+      }).lean();
     }
 
-    // Gửi email xác nhận
-    try {
-      await resend.emails.send({
-        from: "momo's melody studio <onboarding@resend.dev>",
-        to: email,
-        subject: "🎀 Đăng ký Mail Club thành công!",
-        html: `
-          <div style="font-family: sans-serif; max-width: 500px; margin: 0 auto; padding: 24px;">
-            <h2 style="color: #4A4A6A;">Xin chào ${name}! 🌸</h2>
-            <p>Bạn đã đăng ký <strong>${PLAN_LABEL[plan]}</strong> thành công!</p>
-            <div style="background: #FFF0F5; padding: 16px; border-radius: 12px; margin: 16px 0;">
-              <p style="color: #4A4A6A; margin: 0;"><strong>Thông tin chuyển khoản:</strong></p>
-              <p style="color: #4A4A6A;">Ngân hàng: TP Bank</p>
-              <p style="color: #4A4A6A;">Số tài khoản:  24182951170</p>
-              <p style="color: #4A4A6A;">Chủ tài khoản: TRAN THI NGOC ANH</p>
-              <p style="color: #FFB7C5;"><strong>Nội dung CK: TÊN - SĐT</strong></p>
-              <p style="color: #4A4A6A; margin-top: 8px;"><strong>Số tiền: ${price.toLocaleString()} đ</strong></p>
+    if (subscribers.length === 0) {
+      return res.status(400).json({ message: "Không có người nhận nào" });
+    }
+
+    const results = await Promise.allSettled(
+      subscribers.map((sub) =>
+        resend.emails.send({
+          from: "momo's melody studio <onboarding@resend.dev>",
+          to: sub.email,
+          subject,
+          html: `
+            <div style="font-family: sans-serif; max-width: 560px; margin: 0 auto; padding: 0; background: #FFFAF5;">
+              <div style="background: linear-gradient(135deg, #FFD6E0, #E8E4F5); padding: 32px 24px; text-align: center; border-radius: 16px 16px 0 0;">
+                <h1 style="font-family: Georgia, serif; color: #4A4A6A; font-size: 28px; font-weight: normal; margin: 0;">
+                  momo's melody studio 🌸
+                </h1>
+              </div>
+
+              <div style="background: white; padding: 32px 24px;">
+                <p style="color: #4A4A6A; font-size: 15px; margin: 0 0 8px;">Xin chào ${sub.name}! 🩷</p>
+                <div style="color: #4A4A6A; font-size: 14px; line-height: 1.8; white-space: pre-wrap; margin-top: 16px;">
+                  ${message}
+                </div>
+
+                ${
+                  buttonText && buttonLink
+                    ? `
+                  <div style="text-align: center; margin: 32px 0;">
+                    <a href="${buttonLink}"
+                      style="background: #FFB7C5; color: white; padding: 12px 32px; border-radius: 50px; text-decoration: none; font-size: 14px; font-weight: 600;">
+                      ${buttonText}
+                    </a>
+                  </div>
+                `
+                    : ""
+                }
+              </div>
+
+              <div style="background: #FFF0F5; padding: 16px 24px; text-align: center; border-radius: 0 0 16px 16px;">
+                <p style="color: #4A4A6A; font-size: 11px; opacity: 0.5; margin: 0;">
+                  momo's melody studio · Góc Sổ Tay, Tầng Mơ Mộng 🎧
+                </p>
+              </div>
             </div>
-            <p>Sau khi chuyển khoản, chúng mình sẽ xác nhận trong vòng 24h nhé! 🩷</p>
-          </div>
-        `,
-      });
-    } catch (emailErr) {
-      console.error("Lỗi gửi email:", emailErr);
-    }
+          `,
+        }),
+      ),
+    );
 
-    res.status(201).json({ success: true, subscription: sub });
+    const sent = results.filter((r) => r.status === "fulfilled").length;
+    const failed = results.filter((r) => r.status === "rejected").length;
+
+    res.json({
+      success: true,
+      message: `Đã gửi ${sent}/${subscribers.length} email${failed > 0 ? `, ${failed} thất bại` : ""}`,
+      sent,
+      failed,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// 🚀 Thống kê Mail Club cho Dashboard (Admin) - Đã tối ưu 100% Aggregation
+export const getMailClubStats = async (req, res) => {
+  try {
+    const PLAN_PRICE = { monthly: 135000, quarterly: 364500 };
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    const [thisMonthAgg, activeMembers, planCounts] = await Promise.all([
+      MailClubSubscription.aggregate([
+        {
+          $match: {
+            status: { $in: ["active", "expired"] },
+            startDate: { $gte: monthStart },
+          },
+        },
+        {
+          $group: {
+            _id: "$plan",
+            count: { $sum: 1 },
+          },
+        },
+      ]),
+      MailClubSubscription.countDocuments({ status: "active" }),
+      MailClubSubscription.aggregate([
+        { $match: { status: "active" } },
+        { $group: { _id: "$plan", count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+        { $limit: 1 },
+      ]),
+    ]);
+
+    const monthlyRevenue = thisMonthAgg.reduce(
+      (sum, item) => sum + (PLAN_PRICE[item._id] || 0) * item.count,
+      0,
+    );
+
+    const popularPlan =
+      planCounts.length > 0
+        ? planCounts[0]._id === "monthly"
+          ? "Gói Tháng"
+          : "Gói Quý"
+        : "Chưa có";
+
+    res.json({
+      success: true,
+      stats: { monthlyRevenue, activeMembers, popularPlan },
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

@@ -8,7 +8,7 @@ export const createContactMessage = async (req, res) => {
     if (!name || !email || !message) {
       return res
         .status(400)
-        .json({ message: "Vui lòng điền đầy đủ thông tin" });
+        .json({ success: false, message: "Vui lòng điền đầy đủ thông tin" });
     }
 
     const contactMsg = await ContactMessage.create({ name, email, message });
@@ -17,7 +17,7 @@ export const createContactMessage = async (req, res) => {
     try {
       await resend.emails.send({
         from: "momo's melody studio <onboarding@resend.dev>",
-        to: "hung09058@gmail.com", // ← thay email của bạn
+        to: process.env.ADMIN_EMAIL, // 👈 Đã thay bằng biến môi trường
         subject: `📩 Tin nhắn mới từ ${name}`,
         html: `
           <div style="font-family: sans-serif; max-width: 500px; margin: 0 auto; padding: 24px;">
@@ -30,15 +30,19 @@ export const createContactMessage = async (req, res) => {
         `,
       });
     } catch (emailErr) {
-      console.error("Lỗi gửi email:", emailErr);
-      // Không return lỗi — tin nhắn vẫn lưu DB thành công
+      console.error("Lỗi gửi email thông báo Admin:", emailErr);
+      // Không return lỗi — tin nhắn vẫn được lưu vào DB thành công
     }
 
     res
       .status(201)
-      .json({ success: true, message: "Đã gửi tin nhắn thành công" });
+      .json({
+        success: true,
+        message: "Đã gửi tin nhắn thành công",
+        data: contactMsg,
+      });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
@@ -58,7 +62,7 @@ export const markAsRead = async (req, res) => {
     const message = await ContactMessage.findByIdAndUpdate(
       req.params.id,
       { read: true },
-      { returnDocument: "after" },
+      { new: true },
     );
     res.json({ success: true, message });
   } catch (error) {

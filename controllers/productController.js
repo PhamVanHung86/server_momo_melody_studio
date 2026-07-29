@@ -22,9 +22,18 @@ export const addProduct = async (req, res) => {
   try {
     const { name, description, price, category, bestseller, stock } = req.body;
 
-    // Lấy URL ảnh từ Cloudinary
+    // 🛑 1. Kiểm tra xem có file ảnh nào được gửi lên hay không
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Vui lòng chọn ít nhất 1 hình ảnh cho sản phẩm",
+      });
+    }
+
+    // 📸 2. Lấy danh sách URL ảnh từ Cloudinary (an toàn vì req.files chắc chắn tồn tại)
     const images = req.files.map((file) => file.path);
 
+    // 📦 3. Tạo sản phẩm mới
     const product = await Product.create({
       name,
       description,
@@ -37,7 +46,9 @@ export const addProduct = async (req, res) => {
 
     res.status(201).json({ success: true, product });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res
+      .status(500)
+      .json({ message: error.message || "Không thể thêm sản phẩm" });
   }
 };
 

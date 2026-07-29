@@ -9,6 +9,8 @@ import {
   updateSubscription,
   adminCreateSubscription,
   adminUpdateSubscription,
+  sendCustomEmail,
+  getMailClubStats,
 } from "../controllers/mailClubController.js";
 import authMiddleware, {
   adminMiddleware,
@@ -24,6 +26,8 @@ router.get("/my", authMiddleware, getMySubscription);
 
 // Admin
 router.get("/", authMiddleware, adminMiddleware, getAllSubscriptions);
+router.get("/stats", authMiddleware, adminMiddleware, getMailClubStats);
+
 router.put("/:id/confirm", authMiddleware, adminMiddleware, confirmPayment);
 router.put("/:id/renew", authMiddleware, adminMiddleware, renewSubscription);
 router.put("/:id", authMiddleware, adminMiddleware, updateSubscription);
@@ -38,6 +42,12 @@ router.post(
   authMiddleware,
   adminMiddleware,
   adminCreateSubscription,
+);
+router.post(
+  "/send-custom-email",
+  authMiddleware,
+  adminMiddleware,
+  sendCustomEmail,
 );
 router.put(
   "/admin/:id",

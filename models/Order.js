@@ -2,7 +2,7 @@ import mongoose from "mongoose";
 
 const orderSchema = new mongoose.Schema(
   {
-    user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+    user: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     guestEmail: { type: String, default: "" },
     items: [
       {
@@ -25,8 +25,15 @@ const orderSchema = new mongoose.Schema(
     total: { type: Number, required: true },
     status: {
       type: String,
-      enum: ["Đang xử lý", "Đang giao", "Đã giao", "Đã hủy"],
+      enum: ["Đang xử lý", "Đã xác nhận", "Đang giao", "Đã giao", "Đã hủy"],
       default: "Đang xử lý",
+    },
+    confirmedAt: { type: Date, default: null },
+    confirmationEmailSent: { type: Boolean, default: false },
+    mailClubSubscription: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "MailClubSubscription",
+      default: null,
     },
   },
   { timestamps: true },
