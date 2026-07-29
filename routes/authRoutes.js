@@ -37,13 +37,12 @@ router.get(
   "/google/callback",
   passport.authenticate("google", {
     session: false,
-    failureRedirect: "http://localhost:5173/login?error=google",
+    failureRedirect: `${process.env.CLIENT_URL}/login?error=google`,
   }),
   (req, res) => {
     const token = generateToken(req.user._id);
     setCookie(res, token);
-
-    res.redirect("http://localhost:5173");
+    res.redirect(process.env.CLIENT_URL);
   },
 );
 

@@ -32,6 +32,9 @@ const allowedOrigins = [
   process.env.ADMIN_URL || "http://localhost:5174",
 ].filter(Boolean); // Lọc bỏ các giá trị undefined nếu có
 
+const app = express();
+app.set("trust proxy", 1);
+
 // 🛒 Cấu hình CORS dùng biến môi trường
 app.use(
   cors({
