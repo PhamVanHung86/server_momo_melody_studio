@@ -24,8 +24,6 @@ import { autoExpireSubscriptions } from "./controllers/mailClubController.js";
 
 connectDB();
 
-const app = express();
-
 // 🌐 Lấy danh sách URL từ .env (Có kèm giá trị mặc định fallback phòng khi quên cài .env)
 const allowedOrigins = [
   process.env.CLIENT_URL || "http://localhost:5173",
