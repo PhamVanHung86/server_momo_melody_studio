@@ -9,21 +9,26 @@ Backend REST API cho shop handmade **momo's melody studio** (phone charm, keycha
 | Runtime         | Node.js (ESM — `"type": "module"`)                |
 | Web framework   | Express 5                                         |
 | Database        | MongoDB + Mongoose                                |
-| Xác thực        | JWT (cookie httpOnly) + Passport Google OAuth 2.0 |
+| Xác thực        | JWT access + refresh token (Bearer header) + Passport Google OAuth 2.0 |
+| Validate input  | Zod                                               |
+| Bảo mật         | Helmet, express-rate-limit, escape regex tìm kiếm |
 | Upload ảnh      | Multer + Cloudinary (`multer-storage-cloudinary`) |
 | Gửi email       | Resend                                            |
 | Mã hoá mật khẩu | bcryptjs                                          |
 | Cron job        | node-cron                                         |
+| Testing         | Vitest                                            |
 
 ## 2. Cấu trúc thư mục
 
 ```
 server/
-├── config/           # Kết nối DB, Cloudinary, Passport, Resend
+├── config/           # Kết nối DB, Cloudinary, Passport, Resend, validateEnv, logger
 ├── controllers/       # Business logic từng module
-├── middleware/         # authMiddleware, adminMiddleware
+├── middleware/         # authMiddleware, adminMiddleware, validate, rateLimiters
 ├── models/             # Mongoose schemas
 ├── routes/             # Định nghĩa endpoint cho từng module
+├── validation/          # Zod schema cho từng module
+├── utils/               # cache (TTL), escapeRegex
 ├── data/                # (không dùng trong runtime — xem mục Ghi chú)
 ├── index.js             # Entry point — khởi tạo app, middleware, routes, cron job
 └── package.json
@@ -66,7 +71,9 @@ Xem chi tiết & giải thích từng biến trong [`.env.example`](./.env.examp
 | Biến                    | Bắt buộc | Mô tả                                                        |
 | ----------------------- | :------: | ------------------------------------------------------------ |
 | `MONGODB_URI`           |    ✅    | Connection string MongoDB (phải là replica set)              |
-| `JWT_SECRET`            |    ✅    | Chuỗi bí mật ký JWT                                          |
+| `JWT_SECRET`            |    ✅    | Chuỗi bí mật ký access token                                 |
+| `JWT_REFRESH_SECRET`    |    ✅    | Chuỗi bí mật ký refresh token (PHẢI khác `JWT_SECRET`)        |
+| `SERVER_URL`            |    ✅    | URL public của chính server (dùng build callback Google OAuth) |
 | `PORT`                  |    ❌    | Cổng chạy server (mặc định `4000`)                           |
 | `NODE_ENV`              |    ❌    | `development` \| `production`                                |
 | `GOOGLE_CLIENT_ID`      |    ✅    | Đăng nhập Google OAuth                                       |
@@ -78,11 +85,13 @@ Xem chi tiết & giải thích từng biến trong [`.env.example`](./.env.examp
 | `CLIENT_URL`            |    ✅    | URL frontend (dùng cho CORS + redirect sau khi login Google) |
 | `ADMIN_URL`             |    ✅    | URL trang quản trị (dùng cho CORS)                           |
 | `ADMIN_EMAIL`           |    ✅    | Email nhận thông báo khi có người gửi liên hệ                |
+| `SENTRY_DSN`            |    ❌    | Tuỳ chọn — bật báo lỗi tự động qua Sentry (xem `config/logger.js`) |
 
-> ⚠️ Lưu ý: callback Google OAuth (`routes/authRoutes.js`) hiện đang **hard-code**
-> redirect về `http://localhost:5173` thay vì đọc từ `CLIENT_URL`. Cần sửa
-> trước khi deploy production, nếu không đăng nhập Google sẽ luôn redirect
-> nhầm về localhost.
+> ⚠️ Server sẽ **từ chối khởi động** (`process.exit(1)`) và in rõ danh sách
+> biến còn thiếu nếu có bất kỳ biến bắt buộc nào chưa được set — xem
+> `config/validateEnv.js`. Điều này giúp phát hiện lỗi cấu hình NGAY khi
+> deploy thay vì phải đợi user report (như trường hợp thiếu `SERVER_URL`
+> từng gây lỗi `redirect_uri_mismatch` khó hiểu ở Google OAuth).
 
 ## 5. API Endpoints
 
@@ -93,23 +102,28 @@ Tiền tố chung: `/api`. Các route đánh dấu 🔒 yêu cầu đăng nhập
 
 | Method | Path               | Ghi chú                        |
 | ------ | ------------------ | ------------------------------ |
-| POST   | `/register`        | Đăng ký email/password         |
-| POST   | `/login`           | Đăng nhập email/password       |
-| POST   | `/logout`          | Xoá cookie token               |
+| POST   | `/register`        | Đăng ký email/password — có rate limit |
+| POST   | `/login`           | Đăng nhập email/password — có rate limit |
+| POST   | `/refresh`         | Làm mới access token bằng refresh token (có rotation) |
+| POST   | `/logout`          | 🔒 Thu hồi refresh token + client tự xoá token khỏi localStorage |
 | GET    | `/me`              | 🔒 Lấy thông tin user hiện tại |
 | PUT    | `/profile`         | 🔒 Cập nhật hồ sơ (kèm avatar) |
 | PUT    | `/set-password`    | 🔒 Đặt/đổi mật khẩu            |
 | GET    | `/google`          | Bắt đầu OAuth Google           |
-| GET    | `/google/callback` | Callback OAuth Google          |
+| GET    | `/google/callback` | Callback OAuth Google — redirect kèm `accessToken`+`refreshToken` |
+
+> 🔑 Access token sống 30 phút, refresh token sống 30 ngày (lưu hash ở DB,
+> hỗ trợ revoke). Client tự động gọi `/refresh` ngầm khi access token hết
+> hạn — xem `client/src/api/client.js`.
 
 ### Products — `/api/products`
 
 | Method | Path   | Ghi chú                                    |
 | ------ | ------ | ------------------------------------------ |
-| GET    | `/`    | Public — filter `?category=&search=`       |
+| GET    | `/`    | Public — `?category=&search=&minPrice=&maxPrice=&sort=price-asc\|price-desc\|bestseller\|newest`. Thêm `?page=&limit=` để phân trang (mặc định trả hết nếu không truyền `page`) |
 | GET    | `/:id` | Public                                     |
-| POST   | `/`    | 🔒👑 Tạo sản phẩm (tối đa 4 ảnh)           |
-| PUT    | `/:id` | 🔒👑 Cập nhật sản phẩm                     |
+| POST   | `/`    | 🔒👑 Tạo sản phẩm (tối đa 4 ảnh, validate bằng Zod) |
+| PUT    | `/:id` | 🔒👑 Cập nhật sản phẩm (validate bằng Zod) |
 | DELETE | `/:id` | 🔒👑 Xoá sản phẩm (kèm xoá ảnh Cloudinary) |
 
 ### Orders — `/api/orders`
@@ -202,6 +216,30 @@ Tiền tố chung: `/api`. Các route đánh dấu 🔒 yêu cầu đăng nhập
 | GET    | `/`  | Public — trạng thái form đăng ký      |
 | PUT    | `/`  | 🔒👑 Cập nhật trạng thái mở/đóng form |
 
+### Wishlist — `/api/wishlist`
+
+| Method | Path             | Ghi chú                              |
+| ------ | ---------------- | ------------------------------------- |
+| GET    | `/`              | 🔒 Danh sách sản phẩm yêu thích (đã populate đầy đủ) |
+| POST   | `/:productId/toggle` | 🔒 Thêm/bỏ 1 sản phẩm khỏi wishlist (toggle) |
+
+### Reviews — `/api/reviews`
+
+| Method | Path                    | Ghi chú                              |
+| ------ | ----------------------- | ------------------------------------- |
+| GET    | `/product/:productId`   | Public — danh sách đánh giá của 1 sản phẩm |
+| PUT    | `/product/:productId`   | 🔒 Thêm/sửa đánh giá của chính mình (yêu cầu đã mua sản phẩm — "verified purchase") |
+| DELETE | `/:id`                  | 🔒 Xoá đánh giá (chủ đánh giá hoặc admin) |
+
+> ⭐ `Product.ratingAvg`/`ratingCount` được tự động tính lại mỗi khi có
+> review mới/sửa/xoá — xem `recalcProductRating()` trong `reviewController.js`.
+
+### Sitemap
+
+| Method | Path            | Ghi chú                                          |
+| ------ | --------------- | ------------------------------------------------- |
+| GET    | `/sitemap.xml`  | Public — tự động liệt kê toàn bộ sản phẩm + trang tĩnh, phục vụ SEO |
+
 ### Notifications — `/api/notifications`
 
 | Method | Path             | Ghi chú                           |
@@ -216,7 +254,24 @@ Tiền tố chung: `/api`. Các route đánh dấu 🔒 yêu cầu đăng nhập
 `autoExpireSubscriptions()` để tự động chuyển các Mail Club subscription đã
 hết hạn (`endDate < now` và `status: "active"`) sang `status: "expired"`.
 
-## 7. Ghi chú / hạn chế đã biết
+## 7. Testing & CI
+
+```bash
+npm test          # chạy toàn bộ test 1 lần
+npm run test:watch  # chạy test ở chế độ watch khi code
+```
+
+Test hiện tập trung vào **logic thuần** (không cần kết nối MongoDB thật —
+nhanh, ổn định, chạy được ở mọi môi trường CI mà không phụ thuộc mạng để
+tải MongoDB binary): validate middleware, Zod schema (auth + product),
+escape regex chống ReDoS, cache TTL.
+
+GitHub Actions (`.github/workflows/ci.yml`) tự chạy `npm test` cho server và
+`npm run build` cho client + admin ở mỗi lần push/PR vào `main` — giúp bắt
+lỗi cú pháp/logic ngay khi code được đẩy lên, tránh lặp lại các sự cố cấu
+hình từng gặp khi deploy thủ công.
+
+## 8. Ghi chú / hạn chế đã biết
 
 - `data/productsRaw.js` hiện **không được import ở bất kỳ đâu** trong server —
   là dữ liệu seed cũ, giữ lại để tham khảo cấu trúc sản phẩm mẫu, không ảnh
@@ -229,6 +284,6 @@ hết hạn (`endDate < now` và `status: "active"`) sang `status: "expired"`.
 - Transaction khi tạo đơn hàng (`createOrder`) yêu cầu MongoDB Replica Set —
   xem lại mục 3.
 
-## 8. License
+## 9. License
 
 ISC (nội bộ dự án).

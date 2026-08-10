@@ -1,17 +1,62 @@
 import Product from "../models/Product.js";
 import cloudinary from "../config/cloudinary.js";
+import { escapeRegex } from "../utils/escapeRegex.js";
 
-// Lấy tất cả sản phẩm
+// Lấy danh sách sản phẩm — hỗ trợ lọc theo category/khoảng giá, tìm kiếm,
+// sắp xếp, và PHÂN TRANG (tuỳ chọn qua ?page=&limit=). Nếu không truyền
+// page/limit thì giữ hành vi cũ: trả về toàn bộ sản phẩm khớp điều kiện
+// (không breaking change với các chỗ đang gọi API cũ, VD: admin panel).
 export const getProducts = async (req, res) => {
   try {
-    const { category, search } = req.query;
+    const { category, search, minPrice, maxPrice, sort, page, limit } =
+      req.query;
     let query = {};
 
     if (category) query.category = category;
-    if (search) query.name = { $regex: search, $options: "i" };
+    if (search) {
+      query.name = { $regex: escapeRegex(search), $options: "i" };
+    }
+    if (minPrice || maxPrice) {
+      query.price = {};
+      if (minPrice) query.price.$gte = Number(minPrice);
+      if (maxPrice) query.price.$lte = Number(maxPrice);
+    }
 
-    const products = await Product.find(query).sort({ date: -1 });
-    res.json({ success: true, products });
+    const sortMap = {
+      "price-asc": { price: 1 },
+      "price-desc": { price: -1 },
+      bestseller: { sold: -1 },
+      newest: { date: -1 },
+    };
+    const sortOption = sortMap[sort] || { date: -1 };
+
+    // Không truyền page → giữ hành vi cũ (trả hết, không phân trang)
+    if (!page) {
+      const products = await Product.find(query).sort(sortOption);
+      return res.json({ success: true, products });
+    }
+
+    const pageNum = Math.max(1, Number(page) || 1);
+    const limitNum = Math.min(100, Math.max(1, Number(limit) || 20));
+
+    const [products, total] = await Promise.all([
+      Product.find(query)
+        .sort(sortOption)
+        .skip((pageNum - 1) * limitNum)
+        .limit(limitNum),
+      Product.countDocuments(query),
+    ]);
+
+    res.json({
+      success: true,
+      products,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        totalPages: Math.ceil(total / limitNum),
+      },
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -33,14 +78,15 @@ export const addProduct = async (req, res) => {
     // 📸 2. Lấy danh sách URL ảnh từ Cloudinary (an toàn vì req.files chắc chắn tồn tại)
     const images = req.files.map((file) => file.path);
 
-    // 📦 3. Tạo sản phẩm mới
+    // 📦 3. Tạo sản phẩm mới — req.body đã được validate(productSchema) ép
+    // kiểu đúng (price/stock là number, bestseller là boolean thật)
     const product = await Product.create({
       name,
       description,
-      price: Number(price),
+      price,
       category,
-      bestseller: bestseller === "true",
-      stock: Number(stock) || 0,
+      bestseller,
+      stock,
       images,
     });
 
@@ -61,10 +107,10 @@ export const updateProduct = async (req, res) => {
     const updateData = {
       name,
       description,
-      price: Number(price),
+      price,
       category,
-      bestseller: bestseller === "true",
-      stock: Number(stock) || 0,
+      bestseller,
+      stock,
     };
 
     // Nếu có ảnh mới thì cập nhật

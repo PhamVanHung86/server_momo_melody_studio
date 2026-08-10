@@ -1,12 +1,18 @@
 import express from "express";
 import cors from "cors";
-import cookieParser from "cookie-parser";
 import dotenv from "dotenv";
 import cron from "node-cron";
+import helmet from "helmet";
+import compression from "compression";
 
 // 🔑 Load biến môi trường ngay ở đầu file trước khi import DB/Routes
 dotenv.config();
 
+import { validateEnv } from "./config/validateEnv.js";
+validateEnv();
+
+import { globalLimiter } from "./middleware/rateLimiters.js";
+import { logInfo, logError } from "./config/logger.js";
 import passport from "./config/passport.js";
 import connectDB from "./config/db.js";
 import authRoutes from "./routes/authRoutes.js";
@@ -20,6 +26,9 @@ import mailClubRoutes from "./routes/mailClubRoutes.js";
 import mailClubCollectionRoutes from "./routes/mailClubCollectionRoutes.js";
 import mailClubSettingsRoutes from "./routes/mailClubSettingsRoutes.js";
 import notificationRoutes from "./routes/notificationRoutes.js";
+import wishlistRoutes from "./routes/wishlistRoutes.js";
+import reviewRoutes from "./routes/reviewRoutes.js";
+import sitemapRoutes from "./routes/sitemapRoutes.js";
 import { autoExpireSubscriptions } from "./controllers/mailClubController.js";
 
 connectDB();
@@ -42,7 +51,19 @@ app.use(
 );
 
 app.use(express.json());
-app.use(cookieParser());
+// 🛡️ Helmet: thêm các HTTP header bảo mật cơ bản (chống clickjacking,
+// MIME-sniffing...). crossOriginResourcePolicy tắt để không chặn ảnh
+// Cloudinary/API được load từ domain khác (client/admin).
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+  }),
+);
+// 📦 Nén response (gzip) — giảm dung lượng JSON trả về, đặc biệt hữu ích
+// với danh sách sản phẩm dài.
+app.use(compression());
+// 🚦 Giới hạn tốc độ gọi API ở mức thô cho toàn bộ app (chặn bot/spam cơ bản)
+app.use(globalLimiter);
 app.use(passport.initialize());
 
 // 🕐 Cronjob chạy tự động kiểm tra hết hạn Mail Club
@@ -63,6 +84,9 @@ app.use("/api/mail-club", mailClubRoutes);
 app.use("/api/mail-club-collections", mailClubCollectionRoutes);
 app.use("/api/mail-club-settings", mailClubSettingsRoutes);
 app.use("/api/notifications", notificationRoutes);
+app.use("/api/wishlist", wishlistRoutes);
+app.use("/api/reviews", reviewRoutes);
+app.use("/", sitemapRoutes); // /sitemap.xml — cần ở root, không prefix /api
 
 app.get("/", (req, res) => res.send("momo's melody studio API 🌸"));
 
@@ -82,7 +106,7 @@ app.use((err, req, res, next) => {
   // Nếu status code trước đó chưa set lỗi thì mặc định lấy 500
   const statusCode = res.statusCode === 200 ? 500 : res.statusCode;
 
-  console.error("❌ [Global Error]:", err.message);
+  logError(err, { path: req.originalUrl, method: req.method });
 
   res.status(statusCode).json({
     success: false,
@@ -93,4 +117,4 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 4000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => logInfo(`Server running on port ${PORT}`));
