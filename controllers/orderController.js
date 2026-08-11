@@ -5,6 +5,8 @@ import { resend } from "../config/resend.js";
 import Notification from "../models/Notification.js";
 import mongoose from "mongoose";
 import { activateSubscription } from "./mailClubController.js";
+import User from "../models/User.js";
+import { logError } from "../config/logger.js";
 
 const calcDeliveryFee = (subtotal) => {
   const FREE_SHIP_THRESHOLD = 300000;
@@ -83,9 +85,70 @@ export const createOrder = async (req, res) => {
         { session },
       );
       order = createdOrders[0];
+      // 📩 Gửi email thông báo cho admin mỗi khi có đơn hàng mới
+      try {
+        const itemsHtml = order.items
+          .map(
+            (it) =>
+              `<li>${it.name} x${it.quantity} — ${it.price.toLocaleString("vi-VN")}đ</li>`,
+          )
+          .join("");
+
+        await resend.emails.send({
+          from: "momo's melody studio <onboarding@resend.dev>",
+          to: process.env.ADMIN_EMAIL,
+          subject: `🛍️ Đơn hàng mới #${order._id.toString().slice(-6)}`,
+          html: `
+      <div style="font-family: sans-serif; max-width: 500px; margin: 0 auto; padding: 24px;">
+        <h2 style="color: #4A4A6A;">Có đơn hàng mới! 🌸</h2>
+        <p><strong>Khách hàng:</strong> ${shippingInfo?.name || "—"}</p>
+        <p><strong>SĐT:</strong> ${shippingInfo?.phone || "—"}</p>
+        <p><strong>Sản phẩm:</strong></p>
+        <ul style="background: #FFF0F5; padding: 16px 32px; border-radius: 12px; color: #4A4A6A;">
+          ${itemsHtml}
+        </ul>
+        <p><strong>Tổng tiền:</strong> ${order.total.toLocaleString("vi-VN")}đ</p>
+        
+        <!-- 🎯 NÚT TRUY CẬP TRANG ADMIN MỚI -->
+        <div style="margin-top: 28px; text-align: center;">
+          <a href="https://adminmomomelody.netlify.app/" 
+             target="_blank" 
+             style="display: inline-block; background-color: #8B98E3; color: #ffffff; padding: 12px 28px; border-radius: 12px; text-decoration: none; font-weight: bold; font-size: 14px; box-shadow: 0 4px 10px rgba(139, 152, 227, 0.3);">
+            👉 Vào trang Admin xử lý đơn hàng
+          </a>
+        </div>
+      </div>
+    `,
+        });
+      } catch (err) {
+        logError(err, { where: "createOrder -> notify admin email" });
+      }
     });
 
-    res.status(201).json({ success: true, order });
+    let updatedUser = null;
+    if (req.user?.id && shippingInfo) {
+      try {
+        const profileUpdate = {};
+        if (shippingInfo.name?.trim())
+          profileUpdate.name = shippingInfo.name.trim();
+        if (shippingInfo.phone?.trim())
+          profileUpdate.phone = shippingInfo.phone.trim();
+        if (shippingInfo.address?.trim())
+          profileUpdate.address = shippingInfo.address.trim();
+
+        if (Object.keys(profileUpdate).length > 0) {
+          updatedUser = await User.findByIdAndUpdate(
+            req.user.id,
+            profileUpdate,
+            { new: true },
+          ).select("name email phone address avatar role");
+        }
+      } catch (err) {
+        logError(err, { where: "createOrder -> sync profile" });
+      }
+    }
+
+    res.status(201).json({ success: true, order, user: updatedUser });
   } catch (error) {
     res.status(400).json({ message: error.message });
   } finally {
