@@ -95,7 +95,7 @@ export const createOrder = async (req, res) => {
           .join("");
 
         await resend.emails.send({
-          from: "momo's melody studio <onboarding@resend.dev>",
+          from: "momo's melody studio <shop@momomeomeow.com>",
           to: process.env.ADMIN_EMAIL,
           subject: `🛍️ Đơn hàng mới #${order._id.toString().slice(-6)}`,
           html: `
@@ -283,7 +283,7 @@ export const confirmOrder = async (req, res) => {
     if (sendEmail && toEmail) {
       try {
         await resend.emails.send({
-          from: "momo's melody studio <onboarding@resend.dev>",
+          from: "momo's melody studio <shop@momomeomeow.com>",
           to: toEmail,
           subject: "✅ Đơn hàng của bạn đã được xác nhận!",
           html: `

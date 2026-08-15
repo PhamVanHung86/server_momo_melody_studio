@@ -16,7 +16,7 @@ export const createContactMessage = async (req, res) => {
     // Gửi email thông báo cho admin
     try {
       await resend.emails.send({
-        from: "momo's melody studio <onboarding@resend.dev>",
+        from: "momo's melody studio <shop@momomeomeow.com>",
         to: process.env.ADMIN_EMAIL, // 👈 Đã thay bằng biến môi trường
         subject: `📩 Tin nhắn mới từ ${name}`,
         html: `
@@ -34,13 +34,11 @@ export const createContactMessage = async (req, res) => {
       // Không return lỗi — tin nhắn vẫn được lưu vào DB thành công
     }
 
-    res
-      .status(201)
-      .json({
-        success: true,
-        message: "Đã gửi tin nhắn thành công",
-        data: contactMsg,
-      });
+    res.status(201).json({
+      success: true,
+      message: "Đã gửi tin nhắn thành công",
+      data: contactMsg,
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

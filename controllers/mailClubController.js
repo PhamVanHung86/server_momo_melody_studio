@@ -4,6 +4,7 @@ import MailClubSubscription from "../models/MailClubSubscription.js";
 import MailClubSettings from "../models/MailClubSettings.js";
 import Order from "../models/Order.js";
 import { resend } from "../config/resend.js";
+import { logError } from "../config/logger.js";
 
 // Helper: Tính ngày hết hạn dựa theo gói
 const calcEndDate = (startDate, plan) => {
@@ -37,7 +38,7 @@ export const activateSubscription = async (sub, note = "Xác nhận lần đầu
 
   try {
     await resend.emails.send({
-      from: "momo's melody studio <onboarding@resend.dev>",
+      from: "momo's melody studio <shop@momomeomeow.com>",
       to: sub.email,
       subject: "✅ Mail Club đã được kích hoạt!",
       html: `
@@ -161,9 +162,7 @@ export const createSubscription = async (req, res) => {
         shippingInfo: {
           name,
           phone,
-          address: address
-            ? `${address} (Mail Club — Giao qua bưu điện)`
-            : "Mail Club — Giao qua bưu điện",
+          address: address ? `${address} (Mail Club)` : "Mail Club",
           note: `Đăng ký ${PLAN_LABEL[plan] || "Mail Club"}`,
         },
         paymentMethod: "transfer",
@@ -185,10 +184,28 @@ export const createSubscription = async (req, res) => {
       await sub.save({ session });
     });
 
+    // 👤 Đồng bộ tên/SĐT/địa chỉ vào hồ sơ User — cùng logic với
+    // createOrder bên orderController.js, để hồ sơ luôn được cập nhật
+    // dù khách điền thông tin qua đơn hàng thường hay qua form Mail Club
+    if (userId) {
+      try {
+        const profileUpdate = {};
+        if (name?.trim()) profileUpdate.name = name.trim();
+        if (phone?.trim()) profileUpdate.phone = phone.trim();
+        if (address?.trim()) profileUpdate.address = address.trim();
+
+        if (Object.keys(profileUpdate).length > 0) {
+          await User.findByIdAndUpdate(userId, profileUpdate);
+        }
+      } catch (err) {
+        logError(err, { where: "createSubscription -> sync profile" });
+      }
+    }
+
     // 📧 Gửi email xác nhận (Nằm ngoài Transaction để tránh làm gián đoạn DB)
     try {
       await resend.emails.send({
-        from: "momo's melody studio <onboarding@resend.dev>",
+        from: "momo's melody studio <shop@momomeomeow.com>",
         to: email,
         subject: "🎀 Đăng ký Mail Club thành công!",
         html: `
@@ -209,6 +226,38 @@ export const createSubscription = async (req, res) => {
       });
     } catch (emailErr) {
       console.error("Lỗi gửi email xác nhận Mail Club:", emailErr);
+    }
+
+    // 📩 Gửi email thông báo cho admin mỗi khi có đăng ký Mail Club mới
+    try {
+      await resend.emails.send({
+        from: "momo's melody studio <shop@momomeomeow.com>",
+        to: process.env.ADMIN_EMAIL,
+        subject: `🎀 Đăng ký Mail Club mới — ${PLAN_LABEL[plan] || "Mail Club"}`,
+        html: `
+      <div style="font-family: sans-serif; max-width: 500px; margin: 0 auto; padding: 24px;">
+        <h2 style="color: #4A4A6A;">Có đăng ký Mail Club mới! 🌸</h2>
+        <p><strong>Khách hàng:</strong> ${name}</p>
+        <p><strong>Email:</strong> ${email}</p>
+        <p><strong>SĐT:</strong> ${phone}</p>
+        ${address ? `<p><strong>Địa chỉ:</strong> ${address}</p>` : ""}
+        <p><strong>Gói:</strong> ${PLAN_LABEL[plan] || "Mail Club"}</p>
+        <p><strong>Số tiền cần thu:</strong> ${price.toLocaleString("vi-VN")}đ</p>
+        <p style="color: #FFB7C5;"><strong>⏳ Đang chờ xác nhận chuyển khoản</strong></p>
+
+        <!-- 🎯 NÚT TRUY CẬP TRANG ADMIN -->
+        <div style="margin-top: 28px; text-align: center;">
+          <a href="https://adminmomomelody.netlify.app/"
+             target="_blank"
+             style="display: inline-block; background-color: #8B98E3; color: #ffffff; padding: 12px 28px; border-radius: 12px; text-decoration: none; font-weight: bold; font-size: 14px; box-shadow: 0 4px 10px rgba(139, 152, 227, 0.3);">
+            👉 Vào trang Admin xác nhận thanh toán
+          </a>
+        </div>
+      </div>
+    `,
+      });
+    } catch (err) {
+      logError(err, { where: "createSubscription -> notify admin email" });
     }
 
     res.status(201).json({ success: true, subscription: sub, order });
@@ -307,7 +356,7 @@ export const renewSubscription = async (req, res) => {
 
     try {
       await resend.emails.send({
-        from: "momo's melody studio <onboarding@resend.dev>",
+        from: "momo's melody studio <shop@momomeomeow.com>",
         to: sub.email,
         subject: "🔄 Mail Club đã được gia hạn!",
         html: `
@@ -347,7 +396,7 @@ export const sendRenewalReminders = async (req, res) => {
     const results = await Promise.allSettled(
       expiringSubs.map((sub) =>
         resend.emails.send({
-          from: "momo's melody studio <onboarding@resend.dev>",
+          from: "momo's melody studio <shop@momomeomeow.com>",
           to: sub.email,
           subject: "⏰ Mail Club sắp hết hạn!",
           html: `
@@ -357,9 +406,9 @@ export const sendRenewalReminders = async (req, res) => {
               <p>Để tiếp tục nhận Mail club mỗi ${sub.plan === "monthly" ? "tháng" : "quý"}, hãy gia hạn sớm nhé!</p>
               <div style="background: #FFF0F5; padding: 16px; border-radius: 12px; margin: 16px 0;">
                 <p style="color: #4A4A6A;"><strong>Thông tin chuyển khoản:</strong></p>
-                <p style="color: #4A4A6A;">Ngân hàng: Vietcombank</p>
-                <p style="color: #4A4A6A;">Số tài khoản: 1234567890</p>
-                <p style="color: #FFB7C5;"><strong>Nội dung CK: RENEW SĐT</strong></p>
+                <p style="color: #4A4A6A;">Ngân hàng: TP Bank</p>
+                <p style="color: #4A4A6A;">Số tài khoản: 24182951170</p>
+                <p style="color: #FFB7C5;"><strong>Nội dung CK: Tháng mới + SĐT</strong></p>
               </div>
             </div>
           `,
@@ -521,7 +570,7 @@ export const sendCustomEmail = async (req, res) => {
     const results = await Promise.allSettled(
       subscribers.map((sub) =>
         resend.emails.send({
-          from: "momo's melody studio <onboarding@resend.dev>",
+          from: "momo's melody studio <shop@momomeomeow.com>",
           to: sub.email,
           subject,
           html: `
