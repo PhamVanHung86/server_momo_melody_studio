@@ -7,27 +7,12 @@ import mongoose from "mongoose";
 import { activateSubscription } from "./mailClubController.js";
 import User from "../models/User.js";
 import { logError } from "../config/logger.js";
-import { ORDER_STATUS, CANCELLABLE_STATUSES } from "../constants/orderStatus.js";
-import { getActiveFlashSaleDiscountMap, applyFlashSalePrice } from "../utils/pricing.js";
 
 const calcDeliveryFee = (subtotal) => {
   const FREE_SHIP_THRESHOLD = 300000;
   const FLAT_FEE = 20000;
   return subtotal >= FREE_SHIP_THRESHOLD ? 0 : FLAT_FEE;
 };
-
-// Chuẩn hoá tham số phân trang dùng chung cho các list endpoint bên dưới.
-// Giữ nguyên hành vi "không truyền page → trả hết" để tương thích ngược
-// với các chỗ gọi API cũ (giống pattern đã áp dụng ở productController.js),
-// nhưng khuyến khích FE luôn truyền page/limit vì danh sách đơn hàng sẽ
-// lớn dần theo thời gian.
-function parsePagination(query) {
-  const { page, limit } = query;
-  if (!page) return null;
-  const pageNum = Math.max(1, Number(page) || 1);
-  const limitNum = Math.min(100, Math.max(1, Number(limit) || 20));
-  return { pageNum, limitNum, skip: (pageNum - 1) * limitNum };
-}
 
 // Tạo đơn hàng mới
 export const createOrder = async (req, res) => {
@@ -46,12 +31,6 @@ export const createOrder = async (req, res) => {
         (mergedQuantities[item.product] || 0) + item.quantity;
     }
 
-    // 💰 Lấy Flash Sale đang active TRƯỚC transaction (read-only, không cần
-    // session) để tính giá thực tế — KHÔNG bao giờ tin giá do client gửi
-    // lên (items[].price từ FE chỉ mang tính hiển thị/UX, còn số tiền tính
-    // tiền luôn được recompute ở đây).
-    const discountMap = await getActiveFlashSaleDiscountMap();
-
     let order;
 
     await session.withTransaction(async () => {
@@ -69,19 +48,12 @@ export const createOrder = async (req, res) => {
           throw new Error(`${product.name} chỉ còn ${product.stock} sản phẩm`);
         }
 
-        const actualPrice = applyFlashSalePrice(
-          product.price,
-          product._id,
-          discountMap,
-        );
-
-        subtotal += actualPrice * item.quantity;
+        subtotal += product.price * item.quantity;
         verifiedItems.push({
-          product: product._id,
+          product: product._id.toString(),
           name: product.name,
           image: product.images?.[0] || "",
-          price: actualPrice,
-          originalPrice: product.price,
+          price: product.price,
           quantity: item.quantity,
         });
       }
@@ -184,75 +156,25 @@ export const createOrder = async (req, res) => {
   }
 };
 
-// Lấy đơn hàng của user hiện tại (Client) — hỗ trợ phân trang tuỳ chọn
-// qua ?page=&limit= (không truyền → giữ hành vi cũ: trả hết).
+// Lấy đơn hàng của user hiện tại (Client)
 export const getMyOrders = async (req, res) => {
   try {
-    const pagination = parsePagination(req.query);
-    const filter = { user: req.user.id };
-
-    if (!pagination) {
-      const orders = await Order.find(filter).sort({ createdAt: -1 });
-      return res.json({ success: true, orders });
-    }
-
-    const { pageNum, limitNum, skip } = pagination;
-    const [orders, total] = await Promise.all([
-      Order.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limitNum),
-      Order.countDocuments(filter),
-    ]);
-
-    res.json({
-      success: true,
-      orders,
-      pagination: {
-        page: pageNum,
-        limit: limitNum,
-        total,
-        totalPages: Math.ceil(total / limitNum),
-      },
+    const orders = await Order.find({ user: req.user.id }).sort({
+      createdAt: -1,
     });
+    res.json({ success: true, orders });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 };
 
-// Lấy tất cả đơn hàng (Admin) — hỗ trợ phân trang + lọc theo status tuỳ
-// chọn qua ?page=&limit=&status=. Trước đây luôn load TOÀN BỘ collection
-// vào RAM (không giới hạn) — sẽ rất chậm khi số đơn lớn.
+// Lấy tất cả đơn hàng (Admin)
 export const getAllOrders = async (req, res) => {
   try {
-    const { status } = req.query;
-    const pagination = parsePagination(req.query);
-    const filter = status ? { status } : {};
-
-    if (!pagination) {
-      const orders = await Order.find(filter)
-        .populate("user", "name email")
-        .sort({ createdAt: -1 });
-      return res.json({ success: true, orders });
-    }
-
-    const { pageNum, limitNum, skip } = pagination;
-    const [orders, total] = await Promise.all([
-      Order.find(filter)
-        .populate("user", "name email")
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limitNum),
-      Order.countDocuments(filter),
-    ]);
-
-    res.json({
-      success: true,
-      orders,
-      pagination: {
-        page: pageNum,
-        limit: limitNum,
-        total,
-        totalPages: Math.ceil(total / limitNum),
-      },
-    });
+    const orders = await Order.find()
+      .populate("user", "name email")
+      .sort({ createdAt: -1 });
+    res.json({ success: true, orders });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -260,72 +182,29 @@ export const getAllOrders = async (req, res) => {
 
 // Nội dung thông báo tương ứng với từng trạng thái đơn hàng
 const ORDER_STATUS_NOTIFICATIONS = {
-  [ORDER_STATUS.SHIPPING]: {
+  "Đang giao": {
     title: "Đơn hàng đang được giao! 🚚",
     message: (order) =>
       `Đơn hàng #${order._id.toString().slice(-8).toUpperCase()} của bạn đang trên đường giao đến bạn.`,
   },
-  [ORDER_STATUS.DELIVERED]: {
+  "Đã giao": {
     title: "Đơn hàng đã được giao! 🎉",
     message: (order) =>
       `Đơn hàng #${order._id.toString().slice(-8).toUpperCase()} của bạn đã giao thành công. Cảm ơn bạn đã ủng hộ momo's melody studio!`,
   },
-  [ORDER_STATUS.CANCELLED]: {
-    title: "Đơn hàng đã bị huỷ",
-    message: (order) =>
-      `Đơn hàng #${order._id.toString().slice(-8).toUpperCase()} của bạn đã bị huỷ.`,
-  },
 };
-
-/**
- * Hoàn lại tồn kho cho 1 đơn hàng bị huỷ (chỉ chạy đúng 1 lần nhờ điều
- * kiện stockRestored: false trong query — findOneAndUpdate là atomic nên
- * kể cả 2 request huỷ chạy song song cũng chỉ 1 request hoàn kho thành
- * công). Trả về true nếu vừa hoàn kho, false nếu đã hoàn trước đó rồi.
- */
-async function restoreStockForOrder(orderId, session) {
-  const order = await Order.findOneAndUpdate(
-    { _id: orderId, stockRestored: false },
-    { stockRestored: true },
-    { session, new: false }, // trả về document TRƯỚC khi update để lấy items
-  );
-  if (!order) return false; // đã hoàn kho trước đó rồi, không làm lại
-
-  for (const item of order.items) {
-    await Product.findByIdAndUpdate(
-      item.product,
-      { $inc: { stock: item.quantity, sold: -item.quantity } },
-      { session },
-    );
-  }
-  return true;
-}
 
 // Cập nhật trạng thái đơn hàng (Admin)
 export const updateOrderStatus = async (req, res) => {
-  const session = await mongoose.startSession();
   try {
     const { status } = req.body;
-
-    let order;
-    await session.withTransaction(async () => {
-      order = await Order.findById(req.params.id).session(session);
-      if (!order) throw new Error("Không tìm thấy đơn hàng");
-
-      order.status = status;
-      if (status === ORDER_STATUS.CANCELLED) {
-        order.cancelledAt = order.cancelledAt || new Date();
-        order.cancelledBy = order.cancelledBy || "admin";
-        // 🔁 Hoàn kho — trước đây chuyển status sang "Đã hủy" không hề trả
-        // lại stock, khiến tồn kho bị "khoá chết" vĩnh viễn mỗi lần huỷ đơn.
-        await restoreStockForOrder(order._id, session);
-      }
-      await order.save({ session });
-    });
-
-    if (!order) {
+    const order = await Order.findByIdAndUpdate(
+      req.params.id,
+      { status },
+      { returnDocument: "after" },
+    );
+    if (!order)
       return res.status(404).json({ message: "Không tìm thấy đơn hàng" });
-    }
 
     // ✅ Chỉ tạo Notification nếu đơn hàng thuộc về một User đã đăng ký
     const notifDef = ORDER_STATUS_NOTIFICATIONS[status];
@@ -341,66 +220,14 @@ export const updateOrderStatus = async (req, res) => {
 
     res.json({ success: true, order });
   } catch (error) {
-    const notFound = error.message === "Không tìm thấy đơn hàng";
-    res.status(notFound ? 404 : 500).json({ message: error.message });
-  } finally {
-    session.endSession();
-  }
-};
-
-// Huỷ đơn hàng (Khách hàng tự huỷ đơn của chính mình)
-// Chỉ cho phép huỷ khi đơn còn ở trạng thái có thể đảo ngược (chưa giao
-// cho đơn vị vận chuyển) — xem CANCELLABLE_STATUSES. Sau khi đã "Đang
-// giao"/"Đã giao" thì phải liên hệ admin xử lý thủ công.
-export const cancelOrder = async (req, res) => {
-  const session = await mongoose.startSession();
-  try {
-    const { reason } = req.body;
-    let order;
-
-    await session.withTransaction(async () => {
-      order = await Order.findById(req.params.id).session(session);
-      if (!order) throw new Error("Không tìm thấy đơn hàng");
-
-      // IDOR guard: chỉ chủ đơn hàng mới được huỷ
-      if (!order.user || order.user.toString() !== req.user.id) {
-        const err = new Error("Bạn không có quyền huỷ đơn hàng này");
-        err.status = 403;
-        throw err;
-      }
-
-      if (!CANCELLABLE_STATUSES.includes(order.status)) {
-        const err = new Error(
-          "Đơn hàng đang được xử lý/giao nên không thể tự huỷ. Vui lòng liên hệ chúng mình để được hỗ trợ.",
-        );
-        err.status = 400;
-        throw err;
-      }
-
-      order.status = ORDER_STATUS.CANCELLED;
-      order.cancelledAt = new Date();
-      order.cancelledBy = "user";
-      order.cancelReason = reason || "";
-      await restoreStockForOrder(order._id, session);
-      await order.save({ session });
-    });
-
-    res.json({ success: true, order });
-  } catch (error) {
-    res
-      .status(error.status || 400)
-      .json({ message: error.message || "Không thể huỷ đơn hàng" });
-  } finally {
-    session.endSession();
+    res.status(500).json({ message: error.message });
   }
 };
 
 // Đếm số đơn hàng đang chờ xác nhận (Admin)
 export const getPendingOrdersCount = async (req, res) => {
   try {
-    const count = await Order.countDocuments({
-      status: ORDER_STATUS.PROCESSING,
-    });
+    const count = await Order.countDocuments({ status: "Đang xử lý" });
     res.json({ success: true, count });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -419,13 +246,13 @@ export const confirmOrder = async (req, res) => {
     if (!order)
       return res.status(404).json({ message: "Không tìm thấy đơn hàng" });
 
-    if (order.status !== ORDER_STATUS.PROCESSING) {
+    if (order.status !== "Đang xử lý") {
       return res.status(400).json({
         message: "Đơn hàng này không ở trạng thái chờ xác nhận",
       });
     }
 
-    order.status = ORDER_STATUS.CONFIRMED;
+    order.status = "Đã xác nhận";
     order.confirmedAt = new Date();
 
     // Đồng bộ: nếu đơn này gắn với 1 gói Mail Club đang chờ xác nhận
@@ -488,95 +315,89 @@ export const confirmOrder = async (req, res) => {
 };
 
 // Lấy số liệu thống kê Dashboard Admin
-// ⚠️ Trước đây hàm này gọi Order.find() KHÔNG giới hạn (load toàn bộ đơn
-// hàng vào RAM rồi filter/reduce bằng JS) — chắc chắn là bottleneck khi số
-// đơn hàng lên tới hàng nghìn/chục nghìn. Giờ chuyển hết sang MongoDB
-// aggregation pipeline, DB tự tính toán, chỉ trả về vài con số cuối cùng.
 export const getDashboardStats = async (req, res) => {
   try {
+    const orders = await Order.find().populate("user", "name email");
+
+    // ✅ Sửa lỗi: Gọi đúng Product.countDocuments() thay vì Order.find()
+    const totalProducts = await Product.countDocuments();
+
+    // Tổng doanh thu
+    const totalRevenue = orders.reduce((sum, o) => sum + o.total, 0);
+
+    // Doanh thu hôm nay
     const today = new Date();
     today.setHours(0, 0, 0, 0);
+    const todayRevenue = orders
+      .filter((o) => new Date(o.createdAt) >= today)
+      .reduce((sum, o) => sum + o.total, 0);
 
-    const sevenDaysAgo = new Date(today);
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
+    // Đơn hàng đang chờ xử lý
+    const pendingOrders = orders.filter(
+      (o) => o.status === "Đang xử lý",
+    ).length;
 
-    const [
-      totalsAgg,
-      todayAgg,
-      pendingOrders,
-      totalProducts,
-      last7DaysAgg,
-      recentOrders,
-      uniqueCustomersAgg,
-      mailClubStats,
-      mailClubRevenue,
-      expiringCount,
-    ] = await Promise.all([
-      Order.aggregate([
-        {
-          $group: {
-            _id: null,
-            totalRevenue: { $sum: "$total" },
-            totalOrders: { $sum: 1 },
-          },
-        },
-      ]),
-      Order.aggregate([
-        { $match: { createdAt: { $gte: today } } },
-        { $group: { _id: null, revenue: { $sum: "$total" } } },
-      ]),
-      Order.countDocuments({ status: ORDER_STATUS.PROCESSING }),
-      Product.countDocuments(),
-      Order.aggregate([
-        { $match: { createdAt: { $gte: sevenDaysAgo } } },
-        {
-          $group: {
-            _id: {
-              $dateToString: { format: "%Y-%m-%d", date: "$createdAt" },
-            },
-            revenue: { $sum: "$total" },
-          },
-        },
-      ]),
-      Order.find().sort({ createdAt: -1 }).limit(5),
-      Order.aggregate([
-        { $match: { user: { $ne: null } } },
-        { $group: { _id: "$user" } },
-        { $count: "count" },
-      ]),
-      MailClubSubscription.aggregate([
-        { $group: { _id: "$status", count: { $sum: 1 } } },
-      ]),
-      MailClubSubscription.aggregate([
-        { $match: { status: { $in: ["active", "expired"] } } },
-        { $group: { _id: "$plan", count: { $sum: 1 } } },
-      ]),
-      MailClubSubscription.countDocuments({
-        status: "active",
-        endDate: {
-          $gte: new Date(),
-          $lte: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-        },
-      }),
-    ]);
-
-    // Ghép revenue 7 ngày gần nhất theo đúng thứ tự ngày (kể cả ngày $0)
-    const revenueByDay = new Map(
-      last7DaysAgg.map((d) => [d._id, d.revenue]),
-    );
+    // Doanh thu 7 ngày gần nhất
     const last7Days = [];
     for (let i = 6; i >= 0; i--) {
-      const date = new Date(today);
+      const date = new Date();
       date.setDate(date.getDate() - i);
-      const key = date.toISOString().slice(0, 10);
+      date.setHours(0, 0, 0, 0);
+      const nextDate = new Date(date);
+      nextDate.setDate(nextDate.getDate() + 1);
+
+      const dayRevenue = orders
+        .filter((o) => {
+          const orderDate = new Date(o.createdAt);
+          return orderDate >= date && orderDate < nextDate;
+        })
+        .reduce((sum, o) => sum + o.total, 0);
+
       last7Days.push({
         date: date.toLocaleDateString("vi-VN", {
           day: "2-digit",
           month: "2-digit",
         }),
-        revenue: revenueByDay.get(key) || 0,
+        revenue: dayRevenue,
       });
     }
+
+    // Đơn hàng gần đây (5 đơn mới nhất)
+    const recentOrders = orders
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+      .slice(0, 5)
+      .map((o) => ({
+        id: o._id.toString().slice(-8).toUpperCase(),
+        customer: o.shippingInfo.name,
+        total: o.total,
+        status: o.status,
+      }));
+
+    // ✅ Sửa lỗi: Lọc bỏ undefined khi đếm khách hàngunique
+    const uniqueCustomers = new Set(
+      orders.map((o) => o.user?._id?.toString()).filter(Boolean),
+    ).size;
+
+    const mailClubStats = await MailClubSubscription.aggregate([
+      {
+        $group: {
+          _id: "$status",
+          count: { $sum: 1 },
+        },
+      },
+    ]);
+
+    const mailClubRevenue = await MailClubSubscription.aggregate([
+      {
+        $match: { status: { $in: ["active", "expired"] } },
+      },
+      {
+        $group: {
+          _id: "$plan",
+          count: { $sum: 1 },
+        },
+      },
+    ]);
 
     const PLAN_PRICE = { monthly: 135000, quarterly: 364500 };
     const mailClubTotalRevenue = mailClubRevenue.reduce((sum, item) => {
@@ -590,22 +411,24 @@ export const getDashboardStats = async (req, res) => {
     const expiredCount =
       mailClubStats.find((s) => s._id === "expired")?.count || 0;
 
+    const in7Days = new Date();
+    in7Days.setDate(in7Days.getDate() + 7);
+    const expiringCount = await MailClubSubscription.countDocuments({
+      status: "active",
+      endDate: { $gte: new Date(), $lte: in7Days },
+    });
+
     res.json({
       success: true,
       stats: {
-        totalRevenue: totalsAgg[0]?.totalRevenue || 0,
-        todayRevenue: todayAgg[0]?.revenue || 0,
-        totalOrders: totalsAgg[0]?.totalOrders || 0,
+        totalRevenue,
+        todayRevenue,
+        totalOrders: orders.length,
         pendingOrders,
-        totalProducts,
-        totalCustomers: uniqueCustomersAgg[0]?.count || 0,
+        totalProducts, // ✅ Đã truyền đúng số lượng sản phẩm
+        totalCustomers: uniqueCustomers,
         revenueChart: last7Days,
-        recentOrders: recentOrders.map((o) => ({
-          id: o._id.toString().slice(-8).toUpperCase(),
-          customer: o.shippingInfo.name,
-          total: o.total,
-          status: o.status,
-        })),
+        recentOrders,
         mailClub: {
           active: activeCount,
           pending: pendingCount,
@@ -625,92 +448,75 @@ export const getDashboardStats = async (req, res) => {
 };
 
 // Lấy dữ liệu phân tích Analytics
-// ⚠️ Cùng vấn đề với getDashboardStats — chuyển sang aggregation thay vì
-// Order.find() + Product.find() rồi xử lý toàn bộ bằng JS.
 export const getAnalytics = async (req, res) => {
   try {
     const { period = "month" } = req.query;
-    const now = new Date();
 
+    const orders = await Order.find().populate("user", "name");
+    const products = await Product.find();
+
+    const now = new Date();
     let chartData = [];
 
     if (period === "week") {
-      const start = new Date(now);
-      start.setDate(start.getDate() - 6);
-      start.setHours(0, 0, 0, 0);
-      const revenueAgg = await Order.aggregate([
-        { $match: { createdAt: { $gte: start } } },
-        {
-          $group: {
-            _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
-            revenue: { $sum: "$total" },
-          },
-        },
-      ]);
-      const byDay = new Map(revenueAgg.map((d) => [d._id, d.revenue]));
       for (let i = 6; i >= 0; i--) {
-        const date = new Date(now);
+        const date = new Date();
         date.setDate(date.getDate() - i);
         date.setHours(0, 0, 0, 0);
-        const key = date.toISOString().slice(0, 10);
+        const nextDate = new Date(date);
+        nextDate.setDate(nextDate.getDate() + 1);
+
+        const revenue = orders
+          .filter((o) => {
+            const d = new Date(o.createdAt);
+            return d >= date && d < nextDate;
+          })
+          .reduce((sum, o) => sum + o.total, 0);
+
         chartData.push({
           label: date.toLocaleDateString("vi-VN", {
             day: "2-digit",
             month: "2-digit",
           }),
-          revenue: byDay.get(key) || 0,
+          revenue,
         });
       }
     } else if (period === "month") {
-      const start = new Date(now);
-      start.setDate(start.getDate() - 28);
-      const revenueAgg = await Order.aggregate([
-        { $match: { createdAt: { $gte: start } } },
-        {
-          $group: {
-            _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
-            revenue: { $sum: "$total" },
-          },
-        },
-      ]);
-      const byDay = new Map(revenueAgg.map((d) => [d._id, d.revenue]));
       for (let i = 3; i >= 0; i--) {
-        const endDate = new Date(now);
+        const endDate = new Date();
         endDate.setDate(endDate.getDate() - i * 7);
         const startDate = new Date(endDate);
         startDate.setDate(startDate.getDate() - 7);
 
-        let revenue = 0;
-        for (const [key, val] of byDay) {
-          const d = new Date(key);
-          if (d >= startDate && d < endDate) revenue += val;
-        }
-        chartData.push({ label: `Tuần ${4 - i}`, revenue });
+        const revenue = orders
+          .filter((o) => {
+            const d = new Date(o.createdAt);
+            return d >= startDate && d < endDate;
+          })
+          .reduce((sum, o) => sum + o.total, 0);
+
+        chartData.push({
+          label: `Tuần ${4 - i}`,
+          revenue,
+        });
       }
     } else if (period === "year") {
-      const start = new Date(now.getFullYear(), now.getMonth() - 11, 1);
-      const revenueAgg = await Order.aggregate([
-        { $match: { createdAt: { $gte: start } } },
-        {
-          $group: {
-            _id: {
-              year: { $year: "$createdAt" },
-              month: { $month: "$createdAt" },
-            },
-            revenue: { $sum: "$total" },
-          },
-        },
-      ]);
-      const byMonth = new Map(
-        revenueAgg.map((d) => [`${d._id.year}-${d._id.month}`, d.revenue]),
-      );
       for (let i = 11; i >= 0; i--) {
-        const date = new Date(now);
+        const date = new Date();
         date.setMonth(date.getMonth() - i);
-        const key = `${date.getFullYear()}-${date.getMonth() + 1}`;
+        const month = date.getMonth();
+        const year = date.getFullYear();
+
+        const revenue = orders
+          .filter((o) => {
+            const d = new Date(o.createdAt);
+            return d.getMonth() === month && d.getFullYear() === year;
+          })
+          .reduce((sum, o) => sum + o.total, 0);
+
         chartData.push({
-          label: `Th${date.getMonth() + 1}`,
-          revenue: byMonth.get(key) || 0,
+          label: `Th${month + 1}`,
+          revenue,
         });
       }
     }
@@ -719,63 +525,17 @@ export const getAnalytics = async (req, res) => {
     const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
     const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 1);
 
-    const [thisMonthAgg, lastMonthAgg, topProductsAgg, categoryAgg] =
-      await Promise.all([
-        Order.aggregate([
-          { $match: { createdAt: { $gte: thisMonthStart } } },
-          { $group: { _id: null, revenue: { $sum: "$total" } } },
-        ]),
-        Order.aggregate([
-          {
-            $match: {
-              createdAt: { $gte: lastMonthStart, $lt: lastMonthEnd },
-            },
-          },
-          { $group: { _id: null, revenue: { $sum: "$total" } } },
-        ]),
-        Order.aggregate([
-          { $unwind: "$items" },
-          {
-            $group: {
-              _id: "$items.product",
-              name: { $first: "$items.name" },
-              image: { $first: "$items.image" },
-              sold: { $sum: "$items.quantity" },
-              revenue: { $sum: { $multiply: ["$items.price", "$items.quantity"] } },
-            },
-          },
-          { $sort: { sold: -1 } },
-          { $limit: 5 },
-        ]),
-        Order.aggregate([
-          { $unwind: "$items" },
-          {
-            $lookup: {
-              from: "products",
-              localField: "items.product",
-              foreignField: "_id",
-              as: "productInfo",
-            },
-          },
-          {
-            $group: {
-              _id: {
-                $ifNull: [
-                  { $arrayElemAt: ["$productInfo.category", 0] },
-                  "khác",
-                ],
-              },
-              revenue: {
-                $sum: { $multiply: ["$items.price", "$items.quantity"] },
-              },
-            },
-          },
-          { $sort: { revenue: -1 } },
-        ]),
-      ]);
+    const thisMonthRevenue = orders
+      .filter((o) => new Date(o.createdAt) >= thisMonthStart)
+      .reduce((sum, o) => sum + o.total, 0);
 
-    const thisMonthRevenue = thisMonthAgg[0]?.revenue || 0;
-    const lastMonthRevenue = lastMonthAgg[0]?.revenue || 0;
+    const lastMonthRevenue = orders
+      .filter((o) => {
+        const d = new Date(o.createdAt);
+        return d >= lastMonthStart && d < lastMonthEnd;
+      })
+      .reduce((sum, o) => sum + o.total, 0);
+
     const growthPercent =
       lastMonthRevenue > 0
         ? (
@@ -784,17 +544,45 @@ export const getAnalytics = async (req, res) => {
           ).toFixed(1)
         : 0;
 
-    const topProducts = topProductsAgg.map((p) => ({
-      name: p.name,
-      image: p.image,
-      sold: p.sold,
-      revenue: p.revenue,
-    }));
+    const productSales = {};
+    orders.forEach((order) => {
+      order.items.forEach((item) => {
+        const key = item.product?.toString() || item.name;
+        if (!productSales[key]) {
+          productSales[key] = {
+            name: item.name,
+            image: item.image,
+            sold: 0,
+            revenue: 0,
+          };
+        }
+        productSales[key].sold += item.quantity;
+        productSales[key].revenue += item.price * item.quantity;
+      });
+    });
 
-    const categoryData = categoryAgg.map((c) => ({
-      category: c._id,
-      revenue: c.revenue,
-    }));
+    const topProducts = Object.values(productSales)
+      .sort((a, b) => b.sold - a.sold)
+      .slice(0, 5);
+
+    const categoryRevenue = {};
+    for (const order of orders) {
+      for (const item of order.items) {
+        const product = products.find(
+          (p) => p._id.toString() === item.product?.toString(),
+        );
+        const category = product?.category || "khác";
+        categoryRevenue[category] =
+          (categoryRevenue[category] || 0) + item.price * item.quantity;
+      }
+    }
+
+    const categoryData = Object.entries(categoryRevenue)
+      .map(([category, revenue]) => ({
+        category,
+        revenue,
+      }))
+      .sort((a, b) => b.revenue - a.revenue);
 
     res.json({
       success: true,

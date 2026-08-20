@@ -4,7 +4,6 @@ import {
   getMyOrders,
   getAllOrders,
   updateOrderStatus,
-  cancelOrder,
   confirmOrder,
   getPendingOrdersCount,
   getDashboardStats,
@@ -35,8 +34,5 @@ router.put("/:id/confirm", authMiddleware, adminMiddleware, confirmOrder);
 // Giữ nguyên routes của user:
 router.post("/", authMiddleware, createOrder);
 router.get("/my-orders", authMiddleware, getMyOrders);
-// 🚫 Khách tự huỷ đơn của chính mình (chỉ khi đơn còn ở trạng thái có thể
-// đảo ngược — xem CANCELLABLE_STATUSES trong constants/orderStatus.js)
-router.put("/:id/cancel", authMiddleware, cancelOrder);
 
 export default router;

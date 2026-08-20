@@ -14,12 +14,7 @@ import {
 import authMiddleware from "../middleware/authMiddleware.js";
 import { authLimiter } from "../middleware/rateLimiters.js";
 import { validate } from "../middleware/validate.js";
-import {
-  registerSchema,
-  loginSchema,
-  setPasswordSchema,
-  updateProfileSchema,
-} from "../validation/authSchemas.js";
+import { registerSchema, loginSchema } from "../validation/authSchemas.js";
 
 const router = express.Router();
 
@@ -29,22 +24,8 @@ router.post("/login", authLimiter, validate(loginSchema), login);
 router.post("/refresh", authLimiter, refresh);
 router.post("/logout", authMiddleware, logout);
 router.get("/me", authMiddleware, getMe);
-// ⚠️ Thứ tự bắt buộc: upload.single PHẢI chạy trước validate() vì multer
-// là nơi duy nhất parse được multipart/form-data thành req.body (giống
-// lý do đã áp dụng ở productRoutes.js).
-router.put(
-  "/profile",
-  authMiddleware,
-  upload.single("avatar"),
-  validate(updateProfileSchema),
-  updateProfile,
-);
-router.put(
-  "/set-password",
-  authMiddleware,
-  validate(setPasswordSchema),
-  setPassword,
-);
+router.put("/profile", authMiddleware, upload.single("avatar"), updateProfile);
+router.put("/set-password", authMiddleware, setPassword);
 
 // Google OAuth
 router.get(
