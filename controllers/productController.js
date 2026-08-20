@@ -98,6 +98,19 @@ export const addProduct = async (req, res) => {
   }
 };
 
+// Xoá 1 ảnh khỏi Cloudinary theo URL — dùng chung cho updateProduct và
+// deleteProduct. Không throw nếu xoá lỗi (ảnh đã bị xoá tay trước đó,
+// public_id không khớp...) vì đây không phải lỗi nghiêm trọng đủ để chặn
+// luồng chính (cập nhật/xoá sản phẩm).
+async function safeDestroyImage(imageUrl) {
+  try {
+    const publicId = imageUrl.split("/").slice(-2).join("/").split(".")[0];
+    await cloudinary.uploader.destroy(publicId);
+  } catch (err) {
+    console.error("Không thể xoá ảnh Cloudinary:", imageUrl, err.message);
+  }
+}
+
 // Cập nhật sản phẩm
 export const updateProduct = async (req, res) => {
   try {
@@ -113,14 +126,26 @@ export const updateProduct = async (req, res) => {
       stock,
     };
 
-    // Nếu có ảnh mới thì cập nhật
+    // Nếu có ảnh mới thì cập nhật — VÀ xoá các ảnh cũ trên Cloudinary
+    // (trước đây chỉ ghi đè field `images` trong DB, ảnh cũ vẫn nằm mãi
+    // trên Cloudinary → rò rỉ storage, tốn phí dần theo thời gian).
+    let oldImages = [];
     if (req.files && req.files.length > 0) {
+      const existing = await Product.findById(id).select("images");
+      oldImages = existing?.images || [];
       updateData.images = req.files.map((file) => file.path);
     }
 
     const product = await Product.findByIdAndUpdate(id, updateData, {
       new: true,
     });
+    if (!product)
+      return res.status(404).json({ message: "Không tìm thấy sản phẩm" });
+
+    if (oldImages.length > 0) {
+      await Promise.all(oldImages.map(safeDestroyImage));
+    }
+
     res.json({ success: true, product });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -136,10 +161,7 @@ export const deleteProduct = async (req, res) => {
       return res.status(404).json({ message: "Không tìm thấy sản phẩm" });
 
     // Xóa ảnh trên Cloudinary
-    for (const imageUrl of product.images) {
-      const publicId = imageUrl.split("/").slice(-2).join("/").split(".")[0];
-      await cloudinary.uploader.destroy(publicId);
-    }
+    await Promise.all((product.images || []).map(safeDestroyImage));
 
     await product.deleteOne();
     res.json({ success: true, message: "Xóa sản phẩm thành công" });

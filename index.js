@@ -231,6 +231,12 @@ app.use("/", sitemapRoutes); // /sitemap.xml — cần ở root, không prefix /
 
 app.get("/", (req, res) => res.send("momo's melody studio API 🌸"));
 
+// ⚠️ CHỈ ĐỂ TEST LOCAL — XOÁ SAU KHI TEST XONG
+// app.get("/", async (req, res) => {
+//   await new Promise((r) => setTimeout(r, 20000)); // giả lập cold start 20s
+//   res.send("momo's melody studio API 🌸");
+// });
+
 // ==========================================
 // 1. 🛑 404 HANDLER: Chạy khi người dùng gọi sai URL không tồn tại
 // ==========================================
