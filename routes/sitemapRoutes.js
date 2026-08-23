@@ -9,7 +9,7 @@ const router = express.Router();
 // tại domain-gốc/sitemap.xml.
 router.get("/sitemap.xml", async (req, res) => {
   try {
-    const siteUrl = process.env.CLIENT_URL || "https://momomelody.vn";
+    const siteUrl = process.env.CLIENT_URL || "https://momomeomeow.com";
     const products = await Product.find().select("_id updatedAt").lean();
 
     const staticPages = [

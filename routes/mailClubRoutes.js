@@ -5,7 +5,9 @@ import {
   getAllSubscriptions,
   confirmPayment,
   renewSubscription,
-  sendRenewalReminders,
+  triggerNewCycle,
+  previewNewCycle,
+  confirmNewCycle,
   updateSubscription,
   adminCreateSubscription,
   adminUpdateSubscription,
@@ -16,10 +18,11 @@ import authMiddleware, {
   adminMiddleware,
 } from "../middleware/authMiddleware.js";
 
+import { contactLimiter } from "../middleware/rateLimiters.js";
 const router = express.Router();
 
 // Public
-router.post("/subscribe", createSubscription);
+router.post("/subscribe", contactLimiter, createSubscription);
 
 // User đã đăng nhập
 router.get("/my", authMiddleware, getMySubscription);
@@ -35,7 +38,21 @@ router.post(
   "/send-reminders",
   authMiddleware,
   adminMiddleware,
-  sendRenewalReminders,
+  triggerNewCycle,
+);
+// Xem trước nội dung + danh sách người nhận trước khi gửi hàng loạt
+router.get(
+  "/new-cycle/preview",
+  authMiddleware,
+  adminMiddleware,
+  previewNewCycle,
+);
+// Admin xác nhận (có thể đã chỉnh sửa nội dung) -> lúc này mới thực sự gửi mail
+router.post(
+  "/new-cycle/confirm",
+  authMiddleware,
+  adminMiddleware,
+  confirmNewCycle,
 );
 router.post(
   "/admin/create",

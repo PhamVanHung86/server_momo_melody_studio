@@ -7,6 +7,8 @@ import mongoose from "mongoose";
 import { activateSubscription } from "./mailClubController.js";
 import User from "../models/User.js";
 import { logError } from "../config/logger.js";
+import { PLAN_PRICE } from "../config/mailClubPricing.js";
+import { escapeHtml } from "../utils/escapeHtml.js";
 
 const calcDeliveryFee = (subtotal) => {
   const FREE_SHIP_THRESHOLD = 300000;
@@ -101,10 +103,10 @@ export const createOrder = async (req, res) => {
           html: `
       <div style="font-family: sans-serif; max-width: 500px; margin: 0 auto; padding: 24px;">
         <h2 style="color: #4A4A6A;">Có đơn hàng mới! 🌸</h2>
-        <p><strong>Khách hàng:</strong> ${shippingInfo?.name || "—"}</p>
-        <p><strong>SĐT:</strong> ${shippingInfo?.phone || "—"}</p>
+        <p><strong>Khách hàng:</strong> ${escapeHtml(shippingInfo?.name) || "—"}</p>
+        <p><strong>SĐT:</strong> ${escapeHtml(shippingInfo?.phone) || "—"}</p>
         <p><strong>Sản phẩm:</strong></p>
-        <ul style="background: #FFF0F5; padding: 16px 32px; border-radius: 12px; color: #4A4A6A;">
+        <ul style="background: #E8EAF9; padding: 16px 32px; border-radius: 12px; color: #4A4A6A;">
           ${itemsHtml}
         </ul>
         <p><strong>Tổng tiền:</strong> ${order.total.toLocaleString("vi-VN")}đ</p>
@@ -168,13 +170,56 @@ export const getMyOrders = async (req, res) => {
   }
 };
 
-// Lấy tất cả đơn hàng (Admin)
+// // Lấy tất cả đơn hàng (Admin)
+// export const getAllOrders = async (req, res) => {
+//   try {
+//     const orders = await Order.find()
+//       .populate("user", "name email")
+//       .sort({ createdAt: -1 });
+//     res.json({ success: true, orders });
+//   } catch (error) {
+//     res.status(500).json({ message: error.message });
+//   }
+// };
+
+// Lấy tất cả đơn hàng (Admin) — hỗ trợ phân trang tuỳ chọn qua ?page=&limit=,
+// giữ hành vi cũ (trả hết) nếu không truyền page, để không breaking change
+// với admin panel hiện tại (đồng bộ pattern với productController.getProducts)
 export const getAllOrders = async (req, res) => {
   try {
-    const orders = await Order.find()
-      .populate("user", "name email")
-      .sort({ createdAt: -1 });
-    res.json({ success: true, orders });
+    const { page, limit, status } = req.query;
+    const query = {};
+    if (status && status !== "Tất cả") query.status = status;
+
+    if (!page) {
+      const orders = await Order.find(query)
+        .populate("user", "name email")
+        .sort({ createdAt: -1 });
+      return res.json({ success: true, orders });
+    }
+
+    const pageNum = Math.max(1, Number(page) || 1);
+    const limitNum = Math.min(100, Math.max(1, Number(limit) || 20));
+
+    const [orders, total] = await Promise.all([
+      Order.find(query)
+        .populate("user", "name email")
+        .sort({ createdAt: -1 })
+        .skip((pageNum - 1) * limitNum)
+        .limit(limitNum),
+      Order.countDocuments(query),
+    ]);
+
+    res.json({
+      success: true,
+      orders,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        totalPages: Math.ceil(total / limitNum),
+      },
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -198,13 +243,34 @@ const ORDER_STATUS_NOTIFICATIONS = {
 export const updateOrderStatus = async (req, res) => {
   try {
     const { status } = req.body;
-    const order = await Order.findByIdAndUpdate(
-      req.params.id,
-      { status },
-      { returnDocument: "after" },
-    );
-    if (!order)
+
+    const existingOrder = await Order.findById(req.params.id);
+    if (!existingOrder)
       return res.status(404).json({ message: "Không tìm thấy đơn hàng" });
+
+    // 🌸 Đồng bộ Mail Club: nếu đơn này có gắn 1 subscription đang
+    // "Chờ xác nhận" (pending), khi HỦY đơn thì subscription cũng phải
+    // chuyển sang "Đã hủy" (cancelled)
+    if (
+      status === "Đã hủy" &&
+      existingOrder.status !== "Đã hủy" &&
+      existingOrder.mailClubSubscription
+    ) {
+      const sub = await MailClubSubscription.findById(
+        existingOrder.mailClubSubscription,
+      );
+      if (sub && sub.status === "pending") {
+        sub.status = "cancelled";
+        sub.adminNote = sub.adminNote
+          ? `${sub.adminNote} | Hủy do đơn hàng bị hủy`
+          : "Hủy do đơn hàng bị hủy";
+        await sub.save();
+      }
+    }
+
+    existingOrder.status = status;
+    await existingOrder.save();
+    const order = existingOrder;
 
     // ✅ Chỉ tạo Notification nếu đơn hàng thuộc về một User đã đăng ký
     const notifDef = ORDER_STATUS_NOTIFICATIONS[status];
@@ -288,14 +354,14 @@ export const confirmOrder = async (req, res) => {
           subject: "✅ Đơn hàng của bạn đã được xác nhận!",
           html: `
             <div style="font-family: sans-serif; max-width: 500px; margin: 0 auto; padding: 24px;">
-              <h2 style="color: #4A4A6A;">Xin chào ${order.shippingInfo.name}! 🌸</h2>
+              <h2 style="color: #4A4A6A;">Xin chào ${escapeHtml(order.shippingInfo.name)}! 🌸</h2>
               <p>Đơn hàng <strong>#${order._id.toString().slice(-8).toUpperCase()}</strong> của bạn đã được xác nhận và đang được chuẩn bị.</p>
-              <div style="background: #FFF0F5; padding: 16px; border-radius: 12px; margin: 16px 0;">
+              <div style="background: #E8EAF9; padding: 16px; border-radius: 12px; margin: 16px 0;">
                 <p style="color: #4A4A6A; margin: 0;"><strong>Tổng tiền:</strong> ${order.total.toLocaleString()} đ</p>
-                <p style="color: #4A4A6A;"><strong>Địa chỉ giao hàng:</strong> ${order.shippingInfo.address}</p>
+                <p style="color: #4A4A6A;"><strong>Địa chỉ giao hàng:</strong> ${escapeHtml(order.shippingInfo.address)}</p>
                 <p style="color: #4A4A6A;"><strong>Phương thức:</strong> ${order.paymentMethod === "cod" ? "Thanh toán khi nhận hàng (COD)" : "Chuyển khoản"}</p>
               </div>
-              <p>Chúng mình sẽ sớm giao đơn hàng đến bạn. Cảm ơn bạn đã ủng hộ momo's melody studio! 🩷</p>
+              <p>Chúng mình sẽ sớm giao đơn hàng đến bạn. Cảm ơn bạn đã ủng hộ momo's melody studio! 🩵</p>
             </div>
           `,
         });
@@ -317,9 +383,11 @@ export const confirmOrder = async (req, res) => {
 // Lấy số liệu thống kê Dashboard Admin
 export const getDashboardStats = async (req, res) => {
   try {
-    const orders = await Order.find().populate("user", "name email");
+    const orders = await Order.find({ status: { $ne: "Đã hủy" } }).populate(
+      "user",
+      "name email",
+    );
 
-    // ✅ Sửa lỗi: Gọi đúng Product.countDocuments() thay vì Order.find()
     const totalProducts = await Product.countDocuments();
 
     // Tổng doanh thu
@@ -399,7 +467,6 @@ export const getDashboardStats = async (req, res) => {
       },
     ]);
 
-    const PLAN_PRICE = { monthly: 135000, quarterly: 364500 };
     const mailClubTotalRevenue = mailClubRevenue.reduce((sum, item) => {
       return sum + (PLAN_PRICE[item._id] || 0) * item.count;
     }, 0);
@@ -452,7 +519,10 @@ export const getAnalytics = async (req, res) => {
   try {
     const { period = "month" } = req.query;
 
-    const orders = await Order.find().populate("user", "name");
+    const orders = await Order.find({ status: { $ne: "Đã hủy" } }).populate(
+      "user",
+      "name",
+    );
     const products = await Product.find();
 
     const now = new Date();

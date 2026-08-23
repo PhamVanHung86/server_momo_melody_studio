@@ -78,6 +78,7 @@ export const register = async (req, res) => {
       accessToken,
       refreshToken,
       user: {
+        _id: user._id,
         id: user._id,
         name: user.name,
         email: user.email,
@@ -115,6 +116,7 @@ export const login = async (req, res) => {
       refreshToken,
       user: {
         id: user._id,
+        _id: user._id,
         name: user.name,
         email: user.email,
         phone: user.phone || "",
@@ -204,7 +206,10 @@ export const getMe = async (req, res) => {
     const userObj = user.toObject();
     delete userObj.password;
 
-    res.json({ success: true, user: { ...userObj, hasPassword } });
+    res.json({
+      success: true,
+      user: { ...userObj, id: userObj._id, hasPassword },
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -222,7 +227,8 @@ export const updateProfile = async (req, res) => {
       runValidators: true,
     }).select("-password");
 
-    res.json({ success: true, user });
+    const userObj = user.toObject();
+    res.json({ success: true, user: { ...userObj, id: userObj._id } });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

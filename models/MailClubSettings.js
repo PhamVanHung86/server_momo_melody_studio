@@ -9,6 +9,7 @@ const mailClubSettingsSchema = new mongoose.Schema(
       type: String,
       default: "Form đăng ký đã đóng. Hẹn gặp bạn tháng sau! 🌸",
     },
+    lastCycleKey: { type: String, default: null },
   },
   { timestamps: true },
 );

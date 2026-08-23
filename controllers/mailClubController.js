@@ -5,6 +5,12 @@ import MailClubSettings from "../models/MailClubSettings.js";
 import Order from "../models/Order.js";
 import { resend } from "../config/resend.js";
 import { logError } from "../config/logger.js";
+import {
+  PLAN_PRICE,
+  PLAN_LABEL,
+  PLAN_EXTRA_TURNS,
+} from "../config/mailClubPricing.js";
+import { escapeHtml } from "../utils/escapeHtml.js";
 
 // Helper: Tính ngày hết hạn dựa theo gói
 const calcEndDate = (startDate, plan) => {
@@ -21,9 +27,11 @@ export const activateSubscription = async (sub, note = "Xác nhận lần đầu
   const startDate = new Date();
   const endDate = calcEndDate(startDate, sub.plan);
 
+  const extraTurns = PLAN_EXTRA_TURNS[sub.plan] ?? 0;
   sub.status = "active";
   sub.startDate = startDate;
   sub.endDate = endDate;
+  sub.remainingTurns = extraTurns;
   if (note) sub.adminNote = note;
 
   sub.renewalHistory.push({
@@ -43,12 +51,12 @@ export const activateSubscription = async (sub, note = "Xác nhận lần đầu
       subject: "✅ Mail Club đã được kích hoạt!",
       html: `
         <div style="font-family: sans-serif; max-width: 500px; margin: 0 auto; padding: 24px;">
-          <h2 style="color: #4A4A6A;">Xin chào ${sub.name}! 🎀</h2>
+          <h2 style="color: #4A4A6A;">Xin chào ${escapeHtml(sub.name)}! 🎀</h2>
           <p>Mail Club của bạn đã được kích hoạt thành công!</p>
-          <div style="background: #FFF0F5; padding: 16px; border-radius: 12px; margin: 16px 0;">
+          <div style="background: #E8EAF9; padding: 16px; border-radius: 12px; margin: 16px 0;">
             <p style="color: #4A4A6A;"><strong>Gói:</strong> ${sub.plan === "monthly" ? "Tháng" : "Quý"}</p>
             <p style="color: #4A4A6A;"><strong>Bắt đầu:</strong> ${startDate.toLocaleDateString("vi-VN")}</p>
-            <p style="color: #FFB7C5;"><strong>Hết hạn:</strong> ${endDate.toLocaleDateString("vi-VN")}</p>
+            <p style="color: #8B98E3;"><strong>Hết hạn:</strong> ${endDate.toLocaleDateString("vi-VN")}</p>
           </div>
           <p>Mail club của bạn sẽ sớm được gửi đi nhé! 🌸</p>
         </div>
@@ -121,11 +129,6 @@ export const createSubscription = async (req, res) => {
       });
     }
 
-    const PLAN_PRICE = { monthly: 135000, quarterly: 364500 };
-    const PLAN_LABEL = {
-      monthly: "Mail Club Tháng 🌸",
-      quarterly: "Mail Club Quý 🎀",
-    };
     const price = PLAN_PRICE[plan] || 135000;
 
     let sub, order;
@@ -210,17 +213,17 @@ export const createSubscription = async (req, res) => {
         subject: "🎀 Đăng ký Mail Club thành công!",
         html: `
           <div style="font-family: sans-serif; max-width: 500px; margin: 0 auto; padding: 24px;">
-            <h2 style="color: #4A4A6A;">Xin chào ${name}! 🌸</h2>
+            <h2 style="color: #4A4A6A;">Xin chào ${escapeHtml(name)}! 🌸</h2>
             <p>Bạn đã đăng ký <strong>${PLAN_LABEL[plan]}</strong> thành công!</p>
-            <div style="background: #FFF0F5; padding: 16px; border-radius: 12px; margin: 16px 0;">
+            <div style="background: #E8EAF9; padding: 16px; border-radius: 12px; margin: 16px 0;">
               <p style="color: #4A4A6A; margin: 0;"><strong>Thông tin chuyển khoản:</strong></p>
               <p style="color: #4A4A6A;">Ngân hàng: TP Bank</p>
               <p style="color: #4A4A6A;">Số tài khoản: 24182951170</p>
               <p style="color: #4A4A6A;">Chủ tài khoản: TRAN THI NGOC ANH</p>
-              <p style="color: #FFB7C5;"><strong>Nội dung CK: TÊN - SĐT</strong></p>
+              <p style="color: #8B98E3;"><strong>Nội dung CK: TÊN - SĐT</strong></p>
               <p style="color: #4A4A6A; margin-top: 8px;"><strong>Số tiền: ${price.toLocaleString()} đ</strong></p>
             </div>
-            <p>Sau khi chuyển khoản, chúng mình sẽ xác nhận trong vòng 24h nhé! 🩷</p>
+            <p>Sau khi chuyển khoản, chúng mình sẽ xác nhận trong vòng 24h nhé! 🩵</p>
           </div>
         `,
       });
@@ -237,13 +240,13 @@ export const createSubscription = async (req, res) => {
         html: `
       <div style="font-family: sans-serif; max-width: 500px; margin: 0 auto; padding: 24px;">
         <h2 style="color: #4A4A6A;">Có đăng ký Mail Club mới! 🌸</h2>
-        <p><strong>Khách hàng:</strong> ${name}</p>
-        <p><strong>Email:</strong> ${email}</p>
-        <p><strong>SĐT:</strong> ${phone}</p>
-        ${address ? `<p><strong>Địa chỉ:</strong> ${address}</p>` : ""}
+        <p><strong>Khách hàng:</strong> ${escapeHtml(name)}</p>
+        <p><strong>Email:</strong> ${escapeHtml(email)}</p>
+        <p><strong>SĐT:</strong> ${escapeHtml(phone)}</p>
+        ${address ? `<p><strong>Địa chỉ:</strong> ${escapeHtml(address)}</p>` : ""}
         <p><strong>Gói:</strong> ${PLAN_LABEL[plan] || "Mail Club"}</p>
         <p><strong>Số tiền cần thu:</strong> ${price.toLocaleString("vi-VN")}đ</p>
-        <p style="color: #FFB7C5;"><strong>⏳ Đang chờ xác nhận chuyển khoản</strong></p>
+        <p style="color: #8B98E3;"><strong>⏳ Đang chờ xác nhận chuyển khoản</strong></p>
 
         <!-- 🎯 NÚT TRUY CẬP TRANG ADMIN -->
         <div style="margin-top: 28px; text-align: center;">
@@ -278,10 +281,7 @@ export const getAllSubscriptions = async (req, res) => {
 
     if (status && status !== "all") {
       if (status === "expiring") {
-        const now = new Date();
-        const in7Days = new Date();
-        in7Days.setDate(in7Days.getDate() + 7);
-        query = { status: "active", endDate: { $gte: now, $lte: in7Days } };
+        query = { status: "active", remainingTurns: 0 };
       } else {
         query.status = status;
       }
@@ -332,16 +332,17 @@ export const renewSubscription = async (req, res) => {
     const sub = await MailClubSubscription.findById(id);
     if (!sub) return res.status(404).json({ message: "Không tìm thấy" });
 
-    const startDate =
-      sub.endDate && new Date(sub.endDate) > new Date()
-        ? new Date(sub.endDate)
-        : new Date();
-    const endDate = calcEndDate(startDate, plan || sub.plan);
+    const chosenPlan = plan || sub.plan;
+    const startDate = new Date();
+    const endDate = calcEndDate(startDate, chosenPlan);
+    const extraTurns = PLAN_EXTRA_TURNS[chosenPlan] ?? 0;
 
     sub.status = "active";
-    sub.plan = plan || sub.plan;
+    sub.plan = chosenPlan;
     sub.startDate = startDate;
     sub.endDate = endDate;
+    sub.remainingTurns = extraTurns;
+
     if (note) sub.adminNote = note;
 
     sub.renewalHistory.push({
@@ -363,10 +364,10 @@ export const renewSubscription = async (req, res) => {
           <div style="font-family: sans-serif; max-width: 500px; margin: 0 auto; padding: 24px;">
             <h2 style="color: #4A4A6A;">Xin chào ${sub.name}! 🌸</h2>
             <p>Mail Club của bạn đã được gia hạn thành công!</p>
-            <div style="background: #FFF0F5; padding: 16px; border-radius: 12px; margin: 16px 0;">
+            <div style="background: #E8EAF9; padding: 16px; border-radius: 12px; margin: 16px 0;">
               <p style="color: #4A4A6A;"><strong>Gói mới:</strong> ${(plan || sub.plan) === "monthly" ? "Tháng" : "Quý"}</p>
               <p style="color: #4A4A6A;"><strong>Bắt đầu:</strong> ${startDate.toLocaleDateString("vi-VN")}</p>
-              <p style="color: #FFB7C5;"><strong>Hết hạn:</strong> ${endDate.toLocaleDateString("vi-VN")}</p>
+              <p style="color: #8B98E3;"><strong>Hết hạn:</strong> ${endDate.toLocaleDateString("vi-VN")}</p>
             </div>
           </div>
         `,
@@ -376,51 +377,6 @@ export const renewSubscription = async (req, res) => {
     }
 
     res.json({ success: true, subscription: sub });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-};
-
-// Gửi email nhắc gia hạn hàng loạt
-export const sendRenewalReminders = async (req, res) => {
-  try {
-    const now = new Date();
-    const in7Days = new Date();
-    in7Days.setDate(in7Days.getDate() + 7);
-
-    const expiringSubs = await MailClubSubscription.find({
-      status: "active",
-      endDate: { $gte: now, $lte: in7Days },
-    }).lean();
-
-    const results = await Promise.allSettled(
-      expiringSubs.map((sub) =>
-        resend.emails.send({
-          from: "momo's melody studio <shop@momomeomeow.com>",
-          to: sub.email,
-          subject: "⏰ Mail Club sắp hết hạn!",
-          html: `
-            <div style="font-family: sans-serif; max-width: 500px; margin: 0 auto; padding: 24px;">
-              <h2 style="color: #4A4A6A;">Xin chào ${sub.name}! 🩷</h2>
-              <p>Mail Club của bạn sẽ hết hạn vào <strong style="color: #FFB7C5;">${new Date(sub.endDate).toLocaleDateString("vi-VN")}</strong>.</p>
-              <p>Để tiếp tục nhận Mail club mỗi ${sub.plan === "monthly" ? "tháng" : "quý"}, hãy gia hạn sớm nhé!</p>
-              <div style="background: #FFF0F5; padding: 16px; border-radius: 12px; margin: 16px 0;">
-                <p style="color: #4A4A6A;"><strong>Thông tin chuyển khoản:</strong></p>
-                <p style="color: #4A4A6A;">Ngân hàng: TP Bank</p>
-                <p style="color: #4A4A6A;">Số tài khoản: 24182951170</p>
-                <p style="color: #FFB7C5;"><strong>Nội dung CK: Tháng mới + SĐT</strong></p>
-              </div>
-            </div>
-          `,
-        }),
-      ),
-    );
-
-    const sent = results.filter((r) => r.status === "fulfilled").length;
-    res.json({
-      success: true,
-      message: `Đã gửi ${sent}/${expiringSubs.length} email nhắc gia hạn`,
-    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -451,7 +407,15 @@ export const adminCreateSubscription = async (req, res) => {
       startDate,
       endDate,
       adminNote,
+      remainingTurns,
     } = req.body;
+
+    const resolvedTurns =
+      remainingTurns !== undefined
+        ? Number(remainingTurns)
+        : (status || "active") === "active"
+          ? (PLAN_EXTRA_TURNS[plan] ?? 0)
+          : 0;
 
     const sub = await MailClubSubscription.create({
       name,
@@ -463,6 +427,7 @@ export const adminCreateSubscription = async (req, res) => {
       startDate: startDate ? new Date(startDate) : null,
       endDate: endDate ? new Date(endDate) : null,
       adminNote: adminNote || "",
+      remainingTurns: resolvedTurns,
       renewalHistory: startDate
         ? [
             {
@@ -495,6 +460,7 @@ export const adminUpdateSubscription = async (req, res) => {
       startDate,
       endDate,
       adminNote,
+      remainingTurns,
     } = req.body;
 
     const updateData = {
@@ -508,6 +474,9 @@ export const adminUpdateSubscription = async (req, res) => {
       startDate: startDate ? new Date(startDate) : null,
       endDate: endDate ? new Date(endDate) : null,
     };
+    if (remainingTurns !== undefined) {
+      updateData.remainingTurns = Number(remainingTurns);
+    }
 
     const sub = await MailClubSubscription.findByIdAndUpdate(id, updateData, {
       returnDocument: "after",
@@ -519,20 +488,222 @@ export const adminUpdateSubscription = async (req, res) => {
   }
 };
 
-export const autoExpireSubscriptions = async () => {
+export const processNewCycle = async () => {
+  const now = new Date();
+  if (now.getDate() < 15) return { processed: false };
+
+  const cycleKey = `${now.getFullYear()}-${now.getMonth() + 1}`;
+  let settings = await MailClubSettings.findOne();
+  if (settings?.lastCycleKey === cycleKey) return { processed: false };
+
+  const lapsedSubs = await MailClubSubscription.find({
+    status: "active",
+    remainingTurns: { $lte: 0 },
+  }).lean();
+
+  await MailClubSubscription.updateMany(
+    { status: "active", remainingTurns: { $lte: 0 } },
+    { $set: { status: "expired" } },
+  );
+
+  await MailClubSubscription.updateMany(
+    { status: "active", remainingTurns: { $gt: 0 } },
+    { $inc: { remainingTurns: -1 } },
+  );
+
+  // 3. Gửi email nhắc đăng ký lại cho nhóm đã hết lượt
+  const results = await Promise.allSettled(
+    lapsedSubs.map((sub) =>
+      resend.emails.send({
+        from: "momo's melody studio <shop@momomeomeow.com>",
+        to: sub.email,
+        subject: "🌸 Mail tháng mới đã có — đăng ký để nhận nhé!",
+        html: `
+        <div style="font-family: sans-serif; max-width: 500px; margin: 0 auto; padding: 24px;">
+          <h2 style="color: #4A4A6A;">Xin chào ${sub.name}! 🩵</h2>
+          <p style="color: #4A4A6A; line-height: 1.5;">Form đăng ký đang mở, đăng ký lại để tiếp tục nhận mail club mỗi tháng nhé.</p>
+          <p style="color: #4A4A6A; line-height: 1.5;">Bạn cũng có thể chuyển khoản theo cú pháp bên dưới để mình gia hạn cho bạn nhé!</p>
+
+          <div style="background: #E8EAF9; padding: 20px; border-radius: 16px; margin: 20px 0;">
+            <p style="color: #4A4A6A; margin: 0 0 10px 0;"><strong>Thông tin chuyển khoản:</strong></p>
+            <p style="color: #4A4A6A; margin: 4px 0;">Ngân hàng: <strong>TP Bank</strong></p>
+            <p style="color: #4A4A6A; margin: 4px 0;">Số tài khoản: <strong>24182951170</strong></p>
+            <p style="color: #4A4A6A; margin: 4px 0;">Chủ tài khoản: <strong>TRAN THI NGOC ANH</strong></p>
+
+            <div style="margin-top: 14px; padding-top: 12px; border-top: 1px dashed #CBD1F2;">
+              <p style="color: #4A4A6A; margin: 0 0 6px 0; font-size: 13px;">Nội dung chuyển khoản:</p>
+              <span style="background: #FF85A2; color: #ffffff; padding: 8px 16px; border-radius: 8px; font-weight: bold; font-size: 15px; display: inline-block; letter-spacing: 0.5px; box-shadow: 0 2px 4px rgba(255, 133, 162, 0.35);">
+                Tháng mới + Tên + SĐT
+              </span>
+            </div>
+          </div>
+
+          <div style="text-align: center; margin-top: 24px;">
+            <a href="https://momomeomeow.com/"
+               target="_blank"
+               style="display: inline-block; background-color: #8B98E3; color: #ffffff; padding: 12px 28px; border-radius: 12px; text-decoration: none; font-weight: bold; font-size: 14px; box-shadow: 0 4px 10px rgba(139, 152, 227, 0.3);">
+              🌸 Ghé momo xem sản phẩm nhé
+            </a>
+          </div>
+        </div>
+      `,
+      }),
+    ),
+  );
+
+  const sent = results.filter((r) => r.status === "fulfilled").length;
+
+  if (!settings) settings = new MailClubSettings();
+  settings.lastCycleKey = cycleKey;
+  await settings.save();
+
+  return { processed: true, notified: sent, total: lapsedSubs.length };
+};
+
+export const triggerNewCycle = async (req, res) => {
+  const result = await processNewCycle();
+  res.json({
+    success: true,
+    message: result.processed
+      ? `Đã mở kỳ mới: gửi ${result.notified}/${result.total} email nhắc đăng ký lại.`
+      : "Kỳ này chưa tới ngày 15 hoặc đã xử lý rồi.",
+  });
+};
+
+// Nội dung mặc định dùng chung cho preview & confirm, để 2 bên luôn khớp nhau
+const DEFAULT_NEW_CYCLE_SUBJECT =
+  "🌸 Mail tháng mới đã có — đăng ký để nhận nhé!";
+const DEFAULT_NEW_CYCLE_MESSAGE =
+  "Form đăng ký đang mở, đăng ký lại để tiếp tục nhận mail club mỗi tháng nhé.\nBạn cũng có thể chuyển khoản theo cú pháp bên dưới để mình gia hạn cho bạn nhé!";
+
+const buildNewCycleHtml = (sub, message) => `
+  <div style="font-family: sans-serif; max-width: 500px; margin: 0 auto; padding: 24px;">
+    <h2 style="color: #4A4A6A;">Xin chào ${escapeHtml(sub.name)}! 🩵</h2>
+    <div style="color: #4A4A6A; line-height: 1.5; white-space: pre-wrap;">${escapeHtml(message)}</div>
+
+    <div style="background: #E8EAF9; padding: 20px; border-radius: 16px; margin: 20px 0;">
+      <p style="color: #4A4A6A; margin: 0 0 10px 0;"><strong>Thông tin chuyển khoản:</strong></p>
+      <p style="color: #4A4A6A; margin: 4px 0;">Ngân hàng: <strong>TP Bank</strong></p>
+      <p style="color: #4A4A6A; margin: 4px 0;">Số tài khoản: <strong>24182951170</strong></p>
+      <p style="color: #4A4A6A; margin: 4px 0;">Chủ tài khoản: <strong>TRAN THI NGOC ANH</strong></p>
+
+      <div style="margin-top: 14px; padding-top: 12px; border-top: 1px dashed #CBD1F2;">
+        <p style="color: #4A4A6A; margin: 0 0 6px 0; font-size: 13px;">Nội dung chuyển khoản:</p>
+        <span style="background: #FF85A2; color: #ffffff; padding: 8px 16px; border-radius: 8px; font-weight: bold; font-size: 15px; display: inline-block; letter-spacing: 0.5px; box-shadow: 0 2px 4px rgba(255, 133, 162, 0.35);">
+          Tháng mới + Tên + SĐT
+        </span>
+      </div>
+    </div>
+
+    <div style="text-align: center; margin-top: 24px;">
+      <a href="https://momomeomeow.com/"
+         target="_blank"
+         style="display: inline-block; background-color: #8B98E3; color: #ffffff; padding: 12px 28px; border-radius: 12px; text-decoration: none; font-weight: bold; font-size: 14px; box-shadow: 0 4px 10px rgba(139, 152, 227, 0.3);">
+        🌸 Ghé momo xem sản phẩm nhé
+      </a>
+    </div>
+  </div>
+`;
+
+// Bước 1: Xem trước — CHỈ đọc dữ liệu, không gửi mail, không thay đổi trạng thái subscription
+export const previewNewCycle = async (req, res) => {
   try {
-    const result = await MailClubSubscription.updateMany(
-      {
-        status: "active",
-        endDate: { $lt: new Date() },
-      },
+    const now = new Date();
+    const cycleKey = `${now.getFullYear()}-${now.getMonth() + 1}`;
+    const settings = await MailClubSettings.findOne().lean();
+    const alreadyProcessed = settings?.lastCycleKey === cycleKey;
+    const pastOpenDate = now.getDate() >= 15;
+
+    const lapsedSubs = await MailClubSubscription.find({
+      status: "active",
+      remainingTurns: { $lte: 0 },
+    })
+      .select("_id name email")
+      .lean();
+
+    res.json({
+      success: true,
+      eligible: pastOpenDate && !alreadyProcessed,
+      alreadyProcessed,
+      pastOpenDate,
+      cycleKey,
+      total: lapsedSubs.length,
+      recipients: lapsedSubs,
+      subject: DEFAULT_NEW_CYCLE_SUBJECT,
+      message: DEFAULT_NEW_CYCLE_MESSAGE,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Bước 2: Xác nhận — admin đã xem & có thể chỉnh sửa nội dung/người nhận, giờ mới thực sự gửi
+export const confirmNewCycle = async (req, res) => {
+  try {
+    const { subject, message, excludeIds = [] } = req.body;
+
+    const now = new Date();
+    const cycleKey = `${now.getFullYear()}-${now.getMonth() + 1}`;
+
+    if (now.getDate() < 15) {
+      return res
+        .status(400)
+        .json({ message: "Chưa tới ngày 15, chưa thể mở tháng mới." });
+    }
+
+    let settings = await MailClubSettings.findOne();
+    if (settings?.lastCycleKey === cycleKey) {
+      return res.status(400).json({ message: "Tháng này đã được xử lý rồi." });
+    }
+
+    const lapsedSubs = await MailClubSubscription.find({
+      status: "active",
+      remainingTurns: { $lte: 0 },
+    }).lean();
+
+    const excludeSet = new Set((excludeIds || []).map(String));
+    const recipients = lapsedSubs.filter(
+      (sub) => !excludeSet.has(String(sub._id)),
+    );
+
+    const finalSubject = subject?.trim() || DEFAULT_NEW_CYCLE_SUBJECT;
+    const finalMessage = message?.trim() || DEFAULT_NEW_CYCLE_MESSAGE;
+
+    // Cập nhật trạng thái subscription (giữ nguyên logic cũ)
+    await MailClubSubscription.updateMany(
+      { status: "active", remainingTurns: { $lte: 0 } },
       { $set: { status: "expired" } },
     );
-    if (result.modifiedCount > 0) {
-      console.log(`✅ Auto expired ${result.modifiedCount} subscriptions`);
-    }
+    await MailClubSubscription.updateMany(
+      { status: "active", remainingTurns: { $gt: 0 } },
+      { $inc: { remainingTurns: -1 } },
+    );
+
+    const results = await Promise.allSettled(
+      recipients.map((sub) =>
+        resend.emails.send({
+          from: "momo's melody studio <shop@momomeomeow.com>",
+          to: sub.email,
+          subject: finalSubject,
+          html: buildNewCycleHtml(sub, finalMessage),
+        }),
+      ),
+    );
+
+    const sent = results.filter((r) => r.status === "fulfilled").length;
+
+    if (!settings) settings = new MailClubSettings();
+    settings.lastCycleKey = cycleKey;
+    await settings.save();
+
+    res.json({
+      success: true,
+      message: `Đã mở Mailclub tháng mới: gửi ${sent}/${recipients.length} email nhắc đăng ký lại.`,
+      sent,
+      total: recipients.length,
+    });
   } catch (error) {
-    console.error("Auto expire error:", error);
+    res.status(500).json({ message: error.message });
   }
 };
 
@@ -575,14 +746,14 @@ export const sendCustomEmail = async (req, res) => {
           subject,
           html: `
             <div style="font-family: sans-serif; max-width: 560px; margin: 0 auto; padding: 0; background: #FFFAF5;">
-              <div style="background: linear-gradient(135deg, #FFD6E0, #E8E4F5); padding: 32px 24px; text-align: center; border-radius: 16px 16px 0 0;">
+              <div style="background: linear-gradient(135deg, #CBD1F2, #E8E4F5); padding: 32px 24px; text-align: center; border-radius: 16px 16px 0 0;">
                 <h1 style="font-family: Georgia, serif; color: #4A4A6A; font-size: 28px; font-weight: normal; margin: 0;">
                   momo's melody studio 🌸
                 </h1>
               </div>
 
               <div style="background: white; padding: 32px 24px;">
-                <p style="color: #4A4A6A; font-size: 15px; margin: 0 0 8px;">Xin chào ${sub.name}! 🩷</p>
+                <p style="color: #4A4A6A; font-size: 15px; margin: 0 0 8px;">Xin chào ${escapeHtml(sub.name)}! 🩵</p>
                 <div style="color: #4A4A6A; font-size: 14px; line-height: 1.8; white-space: pre-wrap; margin-top: 16px;">
                   ${message}
                 </div>
@@ -592,7 +763,7 @@ export const sendCustomEmail = async (req, res) => {
                     ? `
                   <div style="text-align: center; margin: 32px 0;">
                     <a href="${buttonLink}"
-                      style="background: #FFB7C5; color: white; padding: 12px 32px; border-radius: 50px; text-decoration: none; font-size: 14px; font-weight: 600;">
+                      style="background: #8B98E3; color: white; padding: 12px 32px; border-radius: 50px; text-decoration: none; font-size: 14px; font-weight: 600;">
                       ${buttonText}
                     </a>
                   </div>
@@ -601,7 +772,7 @@ export const sendCustomEmail = async (req, res) => {
                 }
               </div>
 
-              <div style="background: #FFF0F5; padding: 16px 24px; text-align: center; border-radius: 0 0 16px 16px;">
+              <div style="background: #E8EAF9; padding: 16px 24px; text-align: center; border-radius: 0 0 16px 16px;">
                 <p style="color: #4A4A6A; font-size: 11px; opacity: 0.5; margin: 0;">
                   momo's melody studio · Góc Sổ Tay, Tầng Mơ Mộng 🎧
                 </p>
@@ -629,7 +800,6 @@ export const sendCustomEmail = async (req, res) => {
 // 🚀 Thống kê Mail Club cho Dashboard (Admin) - Đã tối ưu 100% Aggregation
 export const getMailClubStats = async (req, res) => {
   try {
-    const PLAN_PRICE = { monthly: 135000, quarterly: 364500 };
     const now = new Date();
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
 

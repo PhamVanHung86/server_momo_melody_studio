@@ -25,6 +25,8 @@ const subscriptionSchema = new mongoose.Schema(
     startDate: { type: Date, default: null },
     endDate: { type: Date, default: null },
 
+    remainingTurns: { type: Number, default: 0 },
+
     // Trạng thái
     status: {
       type: String,

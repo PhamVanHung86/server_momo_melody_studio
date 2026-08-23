@@ -1,5 +1,6 @@
 import ContactMessage from "../models/ContactMessage.js";
 import { resend } from "../config/resend.js";
+import { escapeHtml } from "../utils/escapeHtml.js";
 
 export const createContactMessage = async (req, res) => {
   try {
@@ -18,14 +19,14 @@ export const createContactMessage = async (req, res) => {
       await resend.emails.send({
         from: "momo's melody studio <shop@momomeomeow.com>",
         to: process.env.ADMIN_EMAIL, // 👈 Đã thay bằng biến môi trường
-        subject: `📩 Tin nhắn mới từ ${name}`,
+        subject: `📩 Tin nhắn mới từ ${escapeHtml(name)}`,
         html: `
           <div style="font-family: sans-serif; max-width: 500px; margin: 0 auto; padding: 24px;">
             <h2 style="color: #4A4A6A;">Tin nhắn liên hệ mới 🌸</h2>
-            <p><strong>Tên:</strong> ${name}</p>
-            <p><strong>Email:</strong> ${email}</p>
+            <p><strong>Tên:</strong> ${escapeHtml(name)}</p>
+            <p><strong>Email:</strong> ${escapeHtml(email)}</p>
             <p><strong>Nội dung:</strong></p>
-            <p style="background: #FFF0F5; padding: 16px; border-radius: 12px; color: #4A4A6A;">${message}</p>
+            <p style="background: #E8EAF9; padding: 16px; border-radius: 12px; color: #4A4A6A;"> ${escapeHtml(message)}</p>
           </div>
         `,
       });

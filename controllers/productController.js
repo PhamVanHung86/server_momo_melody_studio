@@ -113,14 +113,33 @@ export const updateProduct = async (req, res) => {
       stock,
     };
 
-    // Nếu có ảnh mới thì cập nhật
+    let oldImages = [];
     if (req.files && req.files.length > 0) {
+      const existingProduct = await Product.findById(id).select("images");
+      oldImages = existingProduct?.images || [];
       updateData.images = req.files.map((file) => file.path);
     }
 
     const product = await Product.findByIdAndUpdate(id, updateData, {
       new: true,
     });
+
+    // Xoá ảnh cũ trên Cloudinary sau khi update DB thành công, tránh rác tài nguyên
+    if (oldImages.length > 0) {
+      for (const imageUrl of oldImages) {
+        try {
+          const publicId = imageUrl
+            .split("/")
+            .slice(-2)
+            .join("/")
+            .split(".")[0];
+          await cloudinary.uploader.destroy(publicId);
+        } catch (destroyErr) {
+          console.error("Lỗi xoá ảnh cũ trên Cloudinary:", destroyErr);
+        }
+      }
+    }
+
     res.json({ success: true, product });
   } catch (error) {
     res.status(500).json({ message: error.message });
