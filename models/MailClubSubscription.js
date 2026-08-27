@@ -27,6 +27,8 @@ const subscriptionSchema = new mongoose.Schema(
 
     remainingTurns: { type: Number, default: 0 },
 
+    shipped: { type: Boolean, default: false },
+
     // Trạng thái
     status: {
       type: String,

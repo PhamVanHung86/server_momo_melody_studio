@@ -32,6 +32,7 @@ export const activateSubscription = async (sub, note = "Xác nhận lần đầu
   sub.startDate = startDate;
   sub.endDate = endDate;
   sub.remainingTurns = extraTurns;
+  sub.shipped = false;
   if (note) sub.adminNote = note;
 
   sub.renewalHistory.push({
@@ -281,7 +282,7 @@ export const getAllSubscriptions = async (req, res) => {
 
     if (status && status !== "all") {
       if (status === "expiring") {
-        query = { status: "active", remainingTurns: 0 };
+        query = { status: "active", remainingTurns: { $lte: 0 } };
       } else {
         query.status = status;
       }
@@ -342,7 +343,7 @@ export const renewSubscription = async (req, res) => {
     sub.startDate = startDate;
     sub.endDate = endDate;
     sub.remainingTurns = extraTurns;
-
+    sub.shipped = false;
     if (note) sub.adminNote = note;
 
     sub.renewalHistory.push({
@@ -508,7 +509,7 @@ export const processNewCycle = async () => {
 
   await MailClubSubscription.updateMany(
     { status: "active", remainingTurns: { $gt: 0 } },
-    { $inc: { remainingTurns: -1 } },
+    { $inc: { remainingTurns: -1 }, $set: { shipped: false } },
   );
 
   // 3. Gửi email nhắc đăng ký lại cho nhóm đã hết lượt
@@ -676,7 +677,7 @@ export const confirmNewCycle = async (req, res) => {
     );
     await MailClubSubscription.updateMany(
       { status: "active", remainingTurns: { $gt: 0 } },
-      { $inc: { remainingTurns: -1 } },
+      { $inc: { remainingTurns: -1 }, $set: { shipped: false } },
     );
 
     const results = await Promise.allSettled(
